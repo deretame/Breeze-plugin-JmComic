@@ -1,4 +1,4 @@
-import pako from "pako";
+import { runtime } from "../type/runtime-api";
 import { JM_SECRET } from "./constants";
 import { hostAesEcbPkcs7DecryptB64 } from "./host-bridge";
 import { md5Hex } from "./utils";
@@ -11,10 +11,10 @@ function tryParseJson(raw: string): unknown | null {
   }
 }
 
-function maybeGunzipBytes(bytes: Uint8Array): Uint8Array {
+async function maybeGunzipBytes(bytes: Uint8Array): Promise<Uint8Array> {
   if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
     try {
-      return pako.ungzip(bytes);
+      return await runtime.bridge.gzipDecompress(bytes);
     } catch {
       return bytes;
     }
@@ -51,18 +51,18 @@ async function decryptDataField(
   }
 }
 
-function normalizeRawResponse(raw: unknown): unknown {
+async function normalizeRawResponse(raw: unknown): Promise<unknown> {
   if (raw === null || raw === undefined || typeof raw === "string") {
     return raw;
   }
 
   if (raw instanceof ArrayBuffer) {
-    return bytesToUtf8(maybeGunzipBytes(new Uint8Array(raw)));
+    return bytesToUtf8(await maybeGunzipBytes(new Uint8Array(raw)));
   }
 
   if (ArrayBuffer.isView(raw)) {
     return bytesToUtf8(
-      maybeGunzipBytes(
+      await maybeGunzipBytes(
         new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength),
       ),
     );
@@ -119,5 +119,5 @@ export async function decodeResponsePayload(
   raw: unknown,
   ts: string,
 ): Promise<unknown> {
-  return decodeValue(normalizeRawResponse(raw), ts);
+  return decodeValue(await normalizeRawResponse(raw), ts);
 }

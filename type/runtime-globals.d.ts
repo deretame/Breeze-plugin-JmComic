@@ -43,6 +43,12 @@ export interface NativeApi {
     steps: NativeChainStep[],
     input: Uint8Array | number,
   ): Promise<Uint8Array>;
+  gzipDecompress(
+    input: Uint8Array | ArrayBuffer | ArrayBufferView,
+  ): Promise<Uint8Array>;
+  gzipCompress(
+    input: Uint8Array | ArrayBuffer | ArrayBufferView,
+  ): Promise<Uint8Array>;
   run(
     op: string,
     input: Uint8Array,
@@ -83,12 +89,26 @@ export interface CacheApi {
 }
 
 export interface BridgeApi {
+  gzipDecompress(
+    input: Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+  ): Promise<Uint8Array>;
+  gzipCompress(
+    input: Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+  ): Promise<Uint8Array>;
   call(name: "crypto.md5_hex", input: string): Promise<string>;
   call(
     name: "crypto.aes_ecb_pkcs7_decrypt_b64",
     payloadB64: string,
     keyRaw: string,
   ): Promise<string>;
+  call(
+    name: "compression.gzip_decompress",
+    input: Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+  ): Promise<number[]>;
+  call(
+    name: "compression.gzip_compress",
+    input: Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+  ): Promise<number[]>;
   call(name: "save_plugin_config", key: string, value: string): Promise<string>;
   call(name: "load_plugin_config", key: string, value: string): Promise<string>;
   call(
@@ -157,7 +177,7 @@ export interface PluginApi {
 }
 
 declare global {
-  var __web: RuntimeApi;
+  var __web: HostRuntimeApi;
   var fs: FsApi | undefined;
   var path: PathApi | undefined;
   var plugin: PluginApi | undefined;

@@ -11,14 +11,12 @@
     "dev:serve": "tsx dev-server.ts"
   },
   "dependencies": {
-    "axios": "^1.13.0",
-    "pako": "^2.1.0"
+    "axios": "^1.13.0"
   },
   "devDependencies": {
     "@rspack/cli": "^1.5.7",
     "@rspack/core": "^1.5.7",
     "@types/node": "^24.6.0",
-    "@types/pako": "^2.0.4",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   }

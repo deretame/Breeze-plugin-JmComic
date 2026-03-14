@@ -3,9 +3,9 @@ import type {
   CacheApi,
   CryptoApi,
   FsApi,
+  HostPluginConfigApi,
   NativeApi,
   PathApi,
-  HostPluginConfigApi,
   PluginApi,
   WasiApi,
 } from "./runtime-globals";
