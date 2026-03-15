@@ -5,8 +5,13 @@
     "moduleResolution": "Bundler",
     "strict": true,
     "skipLibCheck": true,
-    "types": ["node"],
-    "lib": ["ES2020", "DOM"],
+    "types": [
+      "node"
+    ],
+    "lib": [
+      "ES2020",
+      "DOM"
+    ],
     "noEmit": true
   },
   "include": [
@@ -15,6 +20,6 @@
     "rspack.shared.ts",
     "src/**/*.ts",
     "src/**/*.d.ts",
-    "../../../../rquickjs_playground/pnpm_demo/types/runtime-globals.d.ts"
+    "types/**/*.d.ts"
   ]
 }

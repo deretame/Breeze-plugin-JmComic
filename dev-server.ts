@@ -14,7 +14,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const host = process.env.BUNDLE_HOST || "127.0.0.1";
-const port = Number(process.env.BUNDLE_PORT || "7878");
+const preferredPort = Number(process.env.BUNDLE_PORT || "7878");
+let activePort = preferredPort;
 
 const outDir = resolve(__dirname, "dist");
 const outFile = resolve(outDir, "JmComic.bundle.cjs");
@@ -41,6 +42,56 @@ let rebuildCount = 0;
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function getServerUrl(pathname = ""): string {
+  return `http://${host}:${activePort}${pathname}`;
+}
+
+function isAddressInUseError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+
+  return Reflect.get(err, "code") === "EADDRINUSE";
+}
+
+async function listenWithPortFallback(
+  server: ReturnType<typeof createServer>,
+): Promise<void> {
+  let tryPort = preferredPort;
+
+  while (true) {
+    try {
+      await new Promise<void>((resolveListen, rejectListen) => {
+        const onError = (err: Error): void => {
+          server.off("listening", onListening);
+          rejectListen(err);
+        };
+
+        const onListening = (): void => {
+          server.off("error", onError);
+          resolveListen();
+        };
+
+        server.once("error", onError);
+        server.once("listening", onListening);
+        server.listen(tryPort, host);
+      });
+
+      activePort = tryPort;
+      return;
+    } catch (err) {
+      if (!isAddressInUseError(err)) {
+        throw err;
+      }
+
+      console.error(
+        `[bundle-dev] port ${tryPort} is in use, trying ${tryPort + 1}`,
+      );
+      tryPort += 1;
+    }
+  }
 }
 
 function formatRspackError(err: unknown): string {
@@ -109,7 +160,7 @@ async function refreshBuildState(): Promise<void> {
   state.size = bytes.byteLength;
   state.error = null;
 
-  const bundleUrl = `http://${host}:${port}/JmComic.bundle.cjs`;
+  const bundleUrl = getServerUrl("/JmComic.bundle.cjs");
   const versionedBundleUrl = `${bundleUrl}?v=${version}`;
   console.error(
     `[bundle-dev] built version=${version} sha256=${sha256.slice(0, 12)} size=${bytes.byteLength}`,
@@ -146,7 +197,7 @@ function handleVersion(res: ServerResponse): void {
         builtAt: state.builtAt,
         sha256: state.sha256,
         size: state.size,
-        bundleUrl: `http://${host}:${port}/JmComic.bundle.cjs`,
+        bundleUrl: getServerUrl("/JmComic.bundle.cjs"),
         error: state.error,
       },
       null,
@@ -161,8 +212,8 @@ function handleDefault(res: ServerResponse): void {
   res.end(
     [
       "bundle dev server is running",
-      `bundle: http://${host}:${port}/JmComic.bundle.cjs`,
-      `meta:   http://${host}:${port}/version.json`,
+      `bundle: ${getServerUrl("/JmComic.bundle.cjs")}`,
+      `meta:   ${getServerUrl("/version.json")}`,
     ].join("\n"),
   );
 }
@@ -178,7 +229,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const rawUrl = req.url || "/";
   let pathname = rawUrl;
   try {
-    pathname = new URL(rawUrl, `http://${host}:${port}`).pathname;
+    pathname = new URL(rawUrl, getServerUrl("/")).pathname;
   } catch {}
 
   if (pathname === "/version.json") {
@@ -245,10 +296,14 @@ async function start(): Promise<void> {
     void route(req, res);
   });
 
-  server.listen(port, host, () => {
-    console.error(`[bundle-dev] listening at http://${host}:${port}`);
-    console.error(`[bundle-dev] watching ${resolve(__dirname, "src")}`);
-  });
+  await listenWithPortFallback(server);
+  console.error(`[bundle-dev] listening at ${getServerUrl()}`);
+  if (activePort !== preferredPort) {
+    console.error(
+      `[bundle-dev] requested port ${preferredPort} was unavailable`,
+    );
+  }
+  console.error(`[bundle-dev] watching ${resolve(__dirname, "src")}`);
 
   const shutdown = async (): Promise<void> => {
     console.error("[bundle-dev] shutting down...");

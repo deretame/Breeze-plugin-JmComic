@@ -7,7 +7,7 @@ const __dirname = dirname(__filename);
 
 const config = createRspackConfig({
   rootDir: __dirname,
-  outPath: resolve(__dirname, "../../src/js"),
+  outPath: resolve(__dirname, "dist"),
   outFileName: "JmComic.bundle.cjs",
 });
 
