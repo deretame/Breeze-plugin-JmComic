@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import type { Configuration } from "@rspack/core";
 
 export type CreateRspackConfigOptions = {
@@ -18,6 +19,16 @@ export function createRspackConfig({
     devtool: false,
     module: {
       rules: [
+        {
+          test: /\.tsx?$/,
+          exclude: /node_modules/,
+          enforce: "pre",
+          use: [
+            {
+              loader: resolve(rootDir, "build/console-location-loader.cjs"),
+            },
+          ],
+        },
         {
           test: /\.tsx?$/,
           exclude: /node_modules/,

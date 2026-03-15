@@ -52,12 +52,38 @@ async function jmRequest(input: RequestPayload) {
   }
 }
 
-function helloWorld() {
-  console.debug("Hello World!");
+async function testUrlSpeed(url: string) {
+  const start = Date.now();
+  try {
+    await axios.get(url, { timeout: 5000 });
+    return { url, duration: Date.now() - start };
+  } catch (error) {
+    return { url, duration: null };
+  }
+}
+
+async function getFastestUrlIndex(urls: string[]) {
+  if (!urls || urls.length === 0) return 0;
+
+  const testPromises = urls.map((url) => testUrlSpeed(url));
+
+  const results = await Promise.all(testPromises);
+
+  const successfulResults = results.filter((r) => r.duration !== null);
+
+  if (successfulResults.length === 0) {
+    return 0;
+  }
+
+  const fastestResult = successfulResults.reduce((prev, curr) =>
+    curr.duration < prev.duration ? curr : prev,
+  );
+
+  return urls.indexOf(fastestResult.url);
 }
 
 export default {
   jmRequest,
   fetchImageBytes,
-  helloWorld,
+  getFastestUrlIndex,
 };

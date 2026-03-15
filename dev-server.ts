@@ -140,11 +140,29 @@ function createCompiler() {
 
 function setCommonHeaders(res: ServerResponse, contentType?: string): void {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (contentType) {
     res.setHeader("Content-Type", contentType);
   }
+}
+
+async function readRequestBody(req: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+
+  return await new Promise<string>((resolveBody, rejectBody) => {
+    req.on("data", (chunk: Buffer | string) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+
+    req.on("end", () => {
+      resolveBody(Buffer.concat(chunks).toString("utf-8"));
+    });
+
+    req.on("error", (err) => {
+      rejectBody(err);
+    });
+  });
 }
 
 async function refreshBuildState(): Promise<void> {
@@ -214,8 +232,57 @@ function handleDefault(res: ServerResponse): void {
       "bundle dev server is running",
       `bundle: ${getServerUrl("/JmComic.bundle.cjs")}`,
       `meta:   ${getServerUrl("/version.json")}`,
+      `log:    ${getServerUrl("/log")}`,
     ].join("\n"),
   );
+}
+
+async function handleLog(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  if (req.method !== "POST") {
+    setCommonHeaders(res, "application/json; charset=utf-8");
+    res.statusCode = 405;
+    res.end(JSON.stringify({ ok: false, error: "method not allowed" }));
+    return;
+  }
+
+  try {
+    const rawBody = await readRequestBody(req);
+    const parsed = rawBody ? JSON.parse(rawBody) : {};
+    const level = String(parsed?.level || "log").toLowerCase();
+    const message = parsed?.message;
+    const payload = parsed?.payload;
+
+    const text =
+      typeof message === "string" && message.length > 0
+        ? message
+        : JSON.stringify(message ?? "");
+
+    if (level === "error") {
+      console.error(`[remote-log] ${text}`, payload ?? "");
+    } else if (level === "warn") {
+      console.warn(`[remote-log] ${text}`, payload ?? "");
+    } else if (level === "info") {
+      console.info(`[remote-log] ${text}`, payload ?? "");
+    } else {
+      console.log(`[remote-log] ${text}`, payload ?? "");
+    }
+
+    setCommonHeaders(res, "application/json; charset=utf-8");
+    res.statusCode = 200;
+    res.end(JSON.stringify({ ok: true }));
+  } catch (err) {
+    setCommonHeaders(res, "application/json; charset=utf-8");
+    res.statusCode = 400;
+    res.end(
+      JSON.stringify({
+        ok: false,
+        error: `invalid log payload: ${String(err)}`,
+      }),
+    );
+  }
 }
 
 async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -239,6 +306,11 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
 
   if (pathname === "/JmComic.bundle.cjs") {
     await handleBundle(res);
+    return;
+  }
+
+  if (pathname === "/log") {
+    await handleLog(req, res);
     return;
   }
 
