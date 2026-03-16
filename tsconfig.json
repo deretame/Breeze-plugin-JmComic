@@ -15,6 +15,7 @@
     "noEmit": true
   },
   "include": [
+    "build/**/*.ts",
     "dev-server.ts",
     "rspack.config.ts",
     "rspack.shared.ts",
