@@ -5,6 +5,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { networkInterfaces } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { rspack, type MultiStats, type Stats } from "@rspack/core";
@@ -13,17 +14,19 @@ import { createRspackConfig } from "./rspack.shared";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const host = process.env.BUNDLE_HOST || "127.0.0.1";
+const bindHost = process.env.BUNDLE_HOST || "0.0.0.0";
 const preferredPort = Number(process.env.BUNDLE_PORT || "7878");
 let activePort = preferredPort;
 
 const outDir = resolve(__dirname, "dist");
-const outFile = resolve(outDir, "JmComic.bundle.cjs");
+const packageJsonPath = resolve(__dirname, "package.json");
+let bundleFileName = "bundle.bundle.cjs";
+let bundleRoutePath = `/${bundleFileName}`;
+let outFile = resolve(outDir, bundleFileName);
 
 type BuildState = {
   ok: boolean;
   builtAt: string | null;
-  version: string | null;
   sha256: string | null;
   size: number;
   error: string | null;
@@ -32,7 +35,6 @@ type BuildState = {
 const state: BuildState = {
   ok: false,
   builtAt: null,
-  version: null,
   sha256: null,
   size: 0,
   error: null,
@@ -44,8 +46,115 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function getServerUrl(pathname = ""): string {
-  return `http://${host}:${activePort}${pathname}`;
+function toUrlHost(host: string): string {
+  return host.includes(":") ? `[${host}]` : host;
+}
+
+function getServerUrl(pathname = "", host = "127.0.0.1"): string {
+  return `http://${toUrlHost(host)}:${activePort}${pathname}`;
+}
+
+type ListenAddress = {
+  interfaceName: string;
+  family: string;
+  address: string;
+  internal: boolean;
+};
+
+function toFamilyName(family: string | number): string {
+  if (typeof family === "number") {
+    return family === 4 ? "IPv4" : family === 6 ? "IPv6" : String(family);
+  }
+  return family;
+}
+
+function getListenAddresses(): ListenAddress[] {
+  const interfaces = networkInterfaces();
+  const result: ListenAddress[] = [];
+  const seen = new Set<string>();
+
+  for (const [interfaceName, values] of Object.entries(interfaces)) {
+    if (!values) {
+      continue;
+    }
+
+    for (const info of values) {
+      if (!info?.address) {
+        continue;
+      }
+
+      const key = `${interfaceName}|${info.address}`;
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      result.push({
+        interfaceName,
+        family: toFamilyName(info.family),
+        address: info.address,
+        internal: info.internal,
+      });
+    }
+  }
+
+  return result.sort((a, b) => {
+    if (a.interfaceName !== b.interfaceName) {
+      return a.interfaceName.localeCompare(b.interfaceName);
+    }
+    if (a.family !== b.family) {
+      return a.family.localeCompare(b.family);
+    }
+    return a.address.localeCompare(b.address);
+  });
+}
+
+function printListenEndpoints(): void {
+  const listenAddresses = getListenAddresses();
+  const bundlePath = bundleRoutePath;
+  const logPath = "/log";
+
+  console.error(`[bundle-dev] listening on ${bindHost}:${activePort}`);
+  console.error("[bundle-dev] available endpoints (by interface):");
+  console.error(
+    `[bundle-dev]   [local] bundle: ${getServerUrl(bundlePath, "localhost")}`,
+  );
+  console.error(
+    `[bundle-dev]   [local] log:    ${getServerUrl(logPath, "localhost")}`,
+  );
+
+  let currentInterfaceName = "";
+  for (const item of listenAddresses) {
+    if (item.interfaceName !== currentInterfaceName) {
+      currentInterfaceName = item.interfaceName;
+      console.error(`[bundle-dev]   [${currentInterfaceName}]`);
+    }
+
+    const suffix = item.internal ? " internal" : "";
+    console.error(
+      `[bundle-dev]     - ${item.family}${suffix} bundle: ${getServerUrl(bundlePath, item.address)}`,
+    );
+    console.error(
+      `[bundle-dev]       log:  ${getServerUrl(logPath, item.address)}`,
+    );
+  }
+}
+
+async function setupBundleNameFromPackageJson(): Promise<void> {
+  try {
+    const raw = await readFile(packageJsonPath, "utf-8");
+    const pkg = JSON.parse(raw) as { name?: unknown };
+    const packageName =
+      typeof pkg.name === "string" && pkg.name.length > 0 ? pkg.name : "bundle";
+
+    bundleFileName = `${packageName}.bundle.cjs`;
+    bundleRoutePath = `/${bundleFileName}`;
+    outFile = resolve(outDir, bundleFileName);
+  } catch (err) {
+    console.error(
+      `[bundle-dev] read package name failed, fallback to '${bundleFileName}': ${String(err)}`,
+    );
+  }
 }
 
 function isAddressInUseError(err: unknown): boolean {
@@ -76,7 +185,7 @@ async function listenWithPortFallback(
 
         server.once("error", onError);
         server.once("listening", onListening);
-        server.listen(tryPort, host);
+        server.listen(tryPort, bindHost);
       });
 
       activePort = tryPort;
@@ -147,6 +256,26 @@ function setCommonHeaders(res: ServerResponse, contentType?: string): void {
   }
 }
 
+function getRequestOrigin(req: IncomingMessage): string {
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const forwardedHost = req.headers["x-forwarded-host"];
+  const hostHeader = req.headers.host;
+
+  const proto =
+    typeof forwardedProto === "string" && forwardedProto.length > 0
+      ? forwardedProto.split(",")[0]!.trim()
+      : "http";
+
+  const host =
+    typeof forwardedHost === "string" && forwardedHost.length > 0
+      ? forwardedHost.split(",")[0]!.trim()
+      : typeof hostHeader === "string" && hostHeader.length > 0
+        ? hostHeader
+        : `127.0.0.1:${activePort}`;
+
+  return `${proto}://${host}`;
+}
+
 async function readRequestBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
 
@@ -169,22 +298,16 @@ async function refreshBuildState(): Promise<void> {
   const bytes = await readFile(outFile);
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   const builtAt = new Date().toISOString();
-  const version = sha256;
 
   state.ok = true;
   state.builtAt = builtAt;
-  state.version = version;
   state.sha256 = sha256;
   state.size = bytes.byteLength;
   state.error = null;
 
-  const bundleUrl = getServerUrl("/JmComic.bundle.cjs");
-  const versionedBundleUrl = `${bundleUrl}?v=${version}`;
   console.error(
-    `[bundle-dev] built version=${version} sha256=${sha256.slice(0, 12)} size=${bytes.byteLength}`,
+    `[bundle-dev] built sha256=${sha256.slice(0, 12)} size=${bytes.byteLength}`,
   );
-  console.error(`[bundle-dev] bundle url: ${bundleUrl}`);
-  console.error(`[bundle-dev] bundle url (versioned): ${versionedBundleUrl}`);
 }
 
 async function handleBundle(res: ServerResponse): Promise<void> {
@@ -204,35 +327,15 @@ async function handleBundle(res: ServerResponse): Promise<void> {
   }
 }
 
-function handleVersion(res: ServerResponse): void {
-  setCommonHeaders(res, "application/json; charset=utf-8");
-  res.statusCode = state.ok ? 200 : 503;
-  res.end(
-    JSON.stringify(
-      {
-        ok: state.ok,
-        version: state.version,
-        builtAt: state.builtAt,
-        sha256: state.sha256,
-        size: state.size,
-        bundleUrl: getServerUrl("/JmComic.bundle.cjs"),
-        error: state.error,
-      },
-      null,
-      2,
-    ),
-  );
-}
-
-function handleDefault(res: ServerResponse): void {
+function handleDefault(req: IncomingMessage, res: ServerResponse): void {
+  const origin = getRequestOrigin(req);
   setCommonHeaders(res, "text/plain; charset=utf-8");
   res.statusCode = 200;
   res.end(
     [
       "bundle dev server is running",
-      `bundle: ${getServerUrl("/JmComic.bundle.cjs")}`,
-      `meta:   ${getServerUrl("/version.json")}`,
-      `log:    ${getServerUrl("/log")}`,
+      `bundle: ${origin}${bundleRoutePath}`,
+      `log:    ${origin}/log`,
     ].join("\n"),
   );
 }
@@ -274,6 +377,7 @@ async function handleLog(
     res.statusCode = 200;
     res.end(JSON.stringify({ ok: true }));
   } catch (err) {
+    console.error(`[remote-log] invalid log payload: ${String(err)}`);
     setCommonHeaders(res, "application/json; charset=utf-8");
     res.statusCode = 400;
     res.end(
@@ -299,12 +403,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     pathname = new URL(rawUrl, getServerUrl("/")).pathname;
   } catch {}
 
-  if (pathname === "/version.json") {
-    handleVersion(res);
-    return;
-  }
-
-  if (pathname === "/JmComic.bundle.cjs") {
+  if (pathname === bundleRoutePath) {
     await handleBundle(res);
     return;
   }
@@ -314,10 +413,11 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     return;
   }
 
-  handleDefault(res);
+  handleDefault(req, res);
 }
 
 async function start(): Promise<void> {
+  await setupBundleNameFromPackageJson();
   await mkdir(outDir, { recursive: true });
   const compiler = createCompiler();
 
@@ -345,6 +445,7 @@ async function start(): Promise<void> {
 
     try {
       await refreshBuildState();
+      printListenEndpoints();
       console.error(`[bundle-dev] [${ts}] rebuild #${rebuildCount} completed`);
     } catch (refreshErr) {
       state.ok = false;
@@ -369,7 +470,6 @@ async function start(): Promise<void> {
   });
 
   await listenWithPortFallback(server);
-  console.error(`[bundle-dev] listening at ${getServerUrl()}`);
   if (activePort !== preferredPort) {
     console.error(
       `[bundle-dev] requested port ${preferredPort} was unavailable`,
