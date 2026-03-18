@@ -1,5 +1,6 @@
 import axios from "axios";
 import { runtime } from "../type/runtime-api";
+import { imagesUrlIndex, imagesUrls } from "./constants";
 import { createJmClient } from "./client";
 import { toFriendlyError } from "./errors";
 import { buildRequestConfig } from "./request-config";
@@ -127,6 +128,100 @@ function toBool(value: unknown, fallback = false): boolean {
     if (lower === "false") return false;
   }
   return fallback;
+}
+
+function buildMetadata(type: string, name: string, value: unknown) {
+  const list = Array.isArray(value)
+    ? value
+    : value == null
+      ? []
+      : [value];
+  const normalized = list
+    .map((item) => String(item ?? "").trim())
+    .filter((item) => item.length > 0);
+
+  if (!normalized.length) {
+    return null;
+  }
+
+  return {
+    type,
+    name,
+    value: normalized,
+  };
+}
+
+function buildJmCoverUrl(item: any): string {
+  const image = String(item?.image ?? "").trim();
+  if (image.startsWith("http://") || image.startsWith("https://")) {
+    return image;
+  }
+
+  const id = String(item?.id ?? "").trim();
+  const imageBase = String(imagesUrls[imagesUrlIndex] ?? imagesUrls[0] ?? "").trim();
+  if (!id || !imageBase) {
+    return image;
+  }
+
+  return `${imageBase}/media/albums/${id}_3x4.jpg`;
+}
+
+function toComicItem(item: any) {
+  const id = String(item?.id ?? "");
+  return {
+    source: "jm",
+    id,
+    title: String(item?.name ?? ""),
+    subtitle: "",
+    finished: false,
+    likesCount: toNum(item?.likes),
+    viewsCount: toNum(item?.total_views ?? item?.totalViews),
+    updatedAt: String(item?.update_at ?? ""),
+    cover: {
+      id,
+      url: buildJmCoverUrl(item),
+      extra: {
+        path: `${id}.jpg`,
+      },
+    },
+    metadata: [
+      buildMetadata("author", "作者", item?.author),
+      buildMetadata("categories", "分类", [
+        item?.category?.title,
+        item?.category_sub?.title,
+      ]),
+      buildMetadata("tags", "标签", item?.tags),
+      buildMetadata("works", "作品", item?.works),
+      buildMetadata("actors", "角色", item?.actors),
+    ].filter(Boolean),
+    raw: {
+      id,
+      author: String(item?.author ?? ""),
+      description: item?.description ?? "",
+      name: String(item?.name ?? ""),
+      image: String(item?.image ?? ""),
+      category: {
+        id: String(item?.category?.id ?? ""),
+        title: String(item?.category?.title ?? ""),
+      },
+      category_sub: {
+        id: item?.category_sub?.id == null ? null : String(item.category_sub.id),
+        title:
+          item?.category_sub?.title == null
+            ? null
+            : String(item.category_sub.title),
+      },
+      liked: toBool(item?.liked),
+      is_favorite: toBool(item?.is_favorite),
+      update_at: toNum(item?.update_at),
+      likes: toNum(item?.likes),
+      totalViews: toNum(item?.total_views ?? item?.totalViews),
+      tags: toStrList(item?.tags),
+      works: toStrList(item?.works),
+      actors: toStrList(item?.actors),
+    },
+    extra: {},
+  };
 }
 
 function normalizeJmSeries(series: any[]): any[] {
@@ -390,14 +485,27 @@ async function getComicDetail(payload: ComicDetailPayload = {}) {
     })),
   };
 
-  return {
+  const scheme = {
+    version: "1.0.0",
+    type: "comicDetail",
     source: "jm",
-    comicId,
-    extern: payload.extern ?? null,
+  };
+
+  const data = {
     normal,
     raw: {
       comicInfo: normalizedInfo,
     },
+  };
+
+  return {
+    source: "jm",
+    comicId,
+    extern: payload.extern ?? null,
+    scheme,
+    data,
+    normal: data.normal,
+    raw: data.raw,
   };
 }
 
@@ -436,31 +544,7 @@ async function searchComic(payload: JmSearchPayload = {}) {
       total: toNum(response.total, content.length),
       hasReachedMax: content.length < 80,
     },
-    items: content.map((item: any) => ({
-      id: String(item?.id ?? ""),
-      title: String(item?.name ?? ""),
-      raw: {
-        id: String(item?.id ?? ""),
-        author: String(item?.author ?? ""),
-        description: item?.description ?? "",
-        name: String(item?.name ?? ""),
-        image: String(item?.image ?? ""),
-        category: {
-          id: String(item?.category?.id ?? ""),
-          title: String(item?.category?.title ?? ""),
-        },
-        category_sub: {
-          id: item?.category_sub?.id == null ? null : String(item.category_sub.id),
-          title:
-            item?.category_sub?.title == null
-              ? null
-              : String(item.category_sub.title),
-        },
-        liked: toBool(item?.liked),
-        is_favorite: toBool(item?.is_favorite),
-        update_at: toNum(item?.update_at),
-      },
-    })),
+    items: content.map((item: any) => toComicItem(item)),
   };
 
   return {
@@ -476,37 +560,6 @@ async function searchComic(payload: JmSearchPayload = {}) {
 async function getHomeData(payload: JmHomePayload = {}) {
   const page = Number.isFinite(Number(payload.page)) ? Number(payload.page) : -1;
   const extern = toStringMap(payload.extern);
-
-  const toComicItem = (item: any) => ({
-    source: "jm",
-    id: String(item?.id ?? ""),
-    title: String(item?.name ?? ""),
-    cover: {
-      url: "",
-      path: `${String(item?.id ?? "")}.jpg`,
-      name: `${String(item?.id ?? "")}.jpg`,
-    },
-    raw: {
-      id: String(item?.id ?? ""),
-      author: String(item?.author ?? ""),
-      name: String(item?.name ?? ""),
-      image: String(item?.image ?? ""),
-      category: {
-        id: String(item?.category?.id ?? ""),
-        title: String(item?.category?.title ?? ""),
-      },
-      category_sub: {
-        id: item?.category_sub?.id == null ? null : String(item.category_sub.id),
-        title:
-          item?.category_sub?.title == null
-            ? null
-            : String(item.category_sub.title),
-      },
-      liked: toBool(item?.liked),
-      is_favorite: toBool(item?.is_favorite),
-      update_at: toNum(item?.update_at),
-    },
-  });
 
   const buildSectionAction = (section: any) => {
     const title = String(section?.title ?? "");
@@ -669,6 +722,7 @@ async function getRankingData(payload: JmRankingPayload = {}) {
       page,
       total,
       hasReachedMax: content.length === 0,
+      items: content.map((item: any) => toComicItem(item)),
       raw,
     },
   };
@@ -706,6 +760,21 @@ async function getChapter(payload: JmChapterPayload = {}) {
     comicId: String(payload.comicId ?? ""),
     chapterId,
     extern: payload.extern ?? null,
+    scheme: {
+      version: "1.0.0",
+      type: "chapterContent",
+      source: "jm",
+    },
+    data: {
+      chapter: {
+        epId: String(response.id ?? chapterId),
+        epName: String(response.name ?? ""),
+        length: docs.length,
+        epPages: String(docs.length),
+        docs,
+        series: normalizeJmSeries(response.series as any[]),
+      },
+    },
     chapter: {
       epId: String(response.id ?? chapterId),
       epName: String(response.name ?? ""),
