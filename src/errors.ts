@@ -10,6 +10,7 @@ export function resolveServerMessage(data: unknown, fallback: string): string {
 }
 
 export function toFriendlyNetworkError(err: unknown): string {
+  console.log(err);
   const code = String((err as { code?: string } | null)?.code || "");
   const message = String(
     (err as { message?: string } | null)?.message || "",
