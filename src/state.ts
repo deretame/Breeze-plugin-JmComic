@@ -1,6 +1,6 @@
 import type { CacheApi } from "../type/runtime-globals";
 import { getApi } from "../type/runtime-api";
-import { JM_CACHE_SCOPE } from "./constants";
+import { Config } from "./constants";
 import type { CacheKeyConfig } from "./types";
 import { randomDeviceId } from "./utils";
 
@@ -49,7 +49,7 @@ function cacheDelete(key: string): void {
 
 function scopedKey(key: string): string {
   const raw = String(key || "").trim();
-  return `${JM_CACHE_SCOPE}::${raw}`;
+  return `${Config.JM_CACHE_SCOPE}::${raw}`;
 }
 
 function getCachedString(key: string): string {

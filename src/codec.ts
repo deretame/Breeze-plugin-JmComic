@@ -1,7 +1,9 @@
 import { runtime } from "../type/runtime-api";
-import { JM_SECRET } from "./constants";
+import { Config } from "./constants";
 import { hostAesEcbPkcs7DecryptB64 } from "./host-bridge";
 import { md5Hex } from "./utils";
+
+const BASE64_BODY_RE = /^[A-Za-z0-9+/]*$/;
 
 function tryParseJson(raw: string): unknown | null {
   try {
@@ -30,6 +32,32 @@ function bytesToUtf8(bytes: Uint8Array): string {
   }
 }
 
+function normalizeBase64(raw: string): string | null {
+  const compact = String(raw || "")
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(/-/g, "+")
+    .replace(/_/g, "/");
+  if (!compact) {
+    return null;
+  }
+
+  const body = compact.replace(/=+$/g, "");
+  if (!body || !BASE64_BODY_RE.test(body)) {
+    return null;
+  }
+
+  const mod = body.length % 4;
+  if (mod === 1) {
+    return null;
+  }
+  if (mod === 0) {
+    return body;
+  }
+
+  return `${body}${"=".repeat(4 - mod)}`;
+}
+
 async function decryptDataField(
   payload: string,
   ts: string,
@@ -40,7 +68,7 @@ async function decryptDataField(
   }
 
   try {
-    const key = await md5Hex(`${tsRaw}${JM_SECRET}`);
+    const key = await md5Hex(`${tsRaw}${Config.JM_SECRET}`);
     const text = await hostAesEcbPkcs7DecryptB64(payload, key);
     if (!text.trim()) {
       return null;
@@ -97,12 +125,16 @@ async function decodeValue(value: unknown, ts: string): Promise<unknown> {
     );
     const dataField = obj.data;
     if (typeof dataField === "string" && dataField.trim()) {
-      const decrypted = await decryptDataField(dataField.trim(), ts);
-      if (decrypted !== null) {
-        return decrypted;
+      const rawData = dataField.trim();
+      const normalizedB64 = normalizeBase64(rawData);
+      if (normalizedB64) {
+        const decrypted = await decryptDataField(normalizedB64, ts);
+        if (decrypted !== null) {
+          return decrypted;
+        }
       }
 
-      const parsed = tryParseJson(dataField.trim());
+      const parsed = tryParseJson(rawData);
       if (parsed !== null) {
         return parsed;
       }
