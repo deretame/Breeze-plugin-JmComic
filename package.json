@@ -6,7 +6,7 @@
   "packageManager": "pnpm@10.27.0",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "pnpm typecheck && cross-env NODE_OPTIONS=\"--import tsx\" rspack build",
+    "build": "pnpm typecheck && node --import tsx build/generate-manifest.ts && cross-env NODE_OPTIONS=\"--import tsx\" rspack build && node --import tsx build/generate-brotli.ts",
     "dev": "pnpm dev:serve",
     "dev:serve": "tsx dev-server.ts"
   },

@@ -1,4 +1,4 @@
-import { runtime } from "../type/runtime-api";
+import { runtime } from "../types/runtime-api";
 import { Config } from "./constants";
 import { hostAesEcbPkcs7DecryptB64 } from "./host-bridge";
 import { md5Hex } from "./utils";

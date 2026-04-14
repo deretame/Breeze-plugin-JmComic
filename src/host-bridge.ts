@@ -1,4 +1,4 @@
-import { requireApi } from "../type/runtime-api";
+import { requireApi } from "../types/runtime-api";
 
 const bridge = requireApi("bridge");
 const call = bridge.call.bind(bridge);
