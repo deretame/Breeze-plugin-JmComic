@@ -1,5 +1,5 @@
-import type { CacheApi } from "../type/runtime-globals";
-import { getApi } from "../type/runtime-api";
+import type { CacheApi } from "../types/runtime-globals";
+import { getApi } from "../types/runtime-api";
 import { Config } from "./constants";
 import type { CacheKeyConfig } from "./types";
 import { randomDeviceId } from "./utils";

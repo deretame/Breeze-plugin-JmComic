@@ -1,8 +1,9 @@
 import axios from "axios";
-import { runtime } from "../type/runtime-api";
+import { runtime } from "../types/runtime-api";
 import { Config } from "./constants";
 import { createJmClient, setUnauthorizedSchemeProvider } from "./client";
 import { toFriendlyError } from "./errors";
+import { buildPluginInfo } from "./get-info";
 import { buildRequestConfig } from "./request-config";
 import { getCachedResponse } from "./state";
 import type { RequestPayload } from "./types";
@@ -324,9 +325,36 @@ function createImage(input: {
 }
 
 function openSearchAction(payload: Record<string, unknown>) {
+  const source = String(payload.source ?? "").trim();
+  const keyword = String(payload.keyword ?? "").trim();
+  const inheritedExtern =
+    payload.extern &&
+    typeof payload.extern === "object" &&
+    !Array.isArray(payload.extern)
+      ? (payload.extern as Record<string, unknown>)
+      : {};
+  const extern = {
+    ...inheritedExtern,
+    ...(typeof payload.url === "string" && payload.url.trim().length
+      ? { url: payload.url.trim() }
+      : {}),
+    ...(Array.isArray(payload.categories)
+      ? { categories: payload.categories }
+      : {}),
+    ...(typeof payload.mode === "string" && payload.mode.trim().length
+      ? { mode: payload.mode.trim() }
+      : {}),
+    ...(typeof payload.creatorId === "string" && payload.creatorId.trim().length
+      ? { creatorId: payload.creatorId.trim() }
+      : {}),
+  };
   return {
     type: "openSearch",
-    payload,
+    payload: {
+      ...(source ? { source } : {}),
+      ...(keyword ? { keyword } : {}),
+      extern,
+    },
   };
 }
 
@@ -1214,57 +1242,10 @@ async function get_cloud_favorite_scene_bundle() {
 }
 
 async function getInfo() {
-  return {
-    name: "禁漫天堂",
-    uuid: "bf99008d-010b-4f17-ac7c-61a9b57dc3d9",
-    iconUrl: "https://picsum.photos/seed/jm-plugin/320/320",
-    creator: {
-      coverUrl: "",
-      name: "",
-      describe: "",
-    },
-    describe: "禁漫天堂插件",
-    version: "1.0.0",
-    updateUrl: "",
-    function: [
-      {
-        id: "recommend",
-        title: "推荐",
-        action: {
-          type: "openPluginFunction",
-          payload: {
-            id: "recommend",
-            title: "推荐",
-            presentation: "page",
-          },
-        },
-      },
-      {
-        id: "latest",
-        title: "最新",
-        action: {
-          type: "openComicList",
-          payload: { scene: buildJmLatestScene() },
-        },
-      },
-      {
-        id: "ranking",
-        title: "排行榜",
-        action: {
-          type: "openComicList",
-          payload: { scene: buildJmRankingScene() },
-        },
-      },
-      {
-        id: "cloudFavorite",
-        title: "云端收藏",
-        action: {
-          type: "openCloudFavorite",
-          payload: { title: "云端收藏" },
-        },
-      },
-    ],
-  };
+  return buildPluginInfo({
+    buildLatestScene: buildJmLatestScene,
+    buildRankingScene: buildJmRankingScene,
+  });
 }
 
 async function getFunctionPage(payload: Record<string, unknown> = {}) {
@@ -1717,11 +1698,80 @@ async function searchComic(payload: JmSearchPayload = {}) {
   const extern = toStringMap(payload.extern);
   const page = Math.max(1, toNum(payload.page, 1));
   const keyword = String(payload.keyword ?? extern.keyword ?? "").trim();
+  const keywordLower = keyword.toLowerCase();
   const order = String(extern.sort ?? sortByToOrder(extern.sortBy)).trim();
   const path =
     String(payload.path ?? extern.path ?? "").trim() ||
     `${Config.baseUrl}/search`;
   const searchPageSize = 80;
+  const buildResult = (content: any[], total: number) => {
+    const scheme = {
+      version: "1.0.0",
+      type: "searchResult",
+      source: JM_PLUGIN_ID,
+      list: "comicGrid",
+    };
+
+    const data = {
+      paging: {
+        page,
+        pages: page,
+        total,
+        hasReachedMax:
+          content.length === 0 ||
+          content.length < searchPageSize ||
+          (total > 0 && (page - 1) * searchPageSize + content.length >= total),
+      },
+      items: content.map((item: any) => toComicItem(item)),
+    };
+
+    return {
+      source: JM_PLUGIN_ID,
+      extern: {
+        ...extern,
+        sortBy: toNum(extern.sortBy, 1),
+      },
+      scheme,
+      data,
+      paging: data.paging,
+      items: data.items,
+    };
+  };
+
+  if ((Number(keyword) >= 100 || keywordLower.startsWith("jm")) && page === 1) {
+    const comicId = keywordLower.startsWith("jm")
+      ? keyword.slice(2).trim()
+      : keyword;
+    if (comicId) {
+      try {
+        const detailResponse = await getComicDetail({
+          comicId,
+          useJwt: payload.useJwt,
+          jwtToken: payload.jwtToken,
+        });
+        const comicInfo = detailResponse?.data?.raw?.comicInfo as
+          | Record<string, any>
+          | undefined;
+        if (comicInfo?.id) {
+          return buildResult(
+            [
+              {
+                ...comicInfo,
+                author: Array.isArray(comicInfo.author)
+                  ? comicInfo.author.join("/")
+                  : comicInfo.author,
+                total_views: comicInfo.total_views ?? comicInfo.totalViews,
+                update_at: comicInfo.update_at ?? comicInfo.addtime,
+              },
+            ],
+            1,
+          );
+        }
+      } catch (_error) {
+        // ignore direct-id fallback failure and continue with normal search
+      }
+    }
+  }
 
   const response = (await jmRequest({
     path,
@@ -1737,39 +1787,7 @@ async function searchComic(payload: JmSearchPayload = {}) {
 
   const content = Array.isArray(response.content) ? response.content : [];
 
-  const scheme = {
-    version: "1.0.0",
-    type: "searchResult",
-    source: JM_PLUGIN_ID,
-    list: "comicGrid",
-  };
-
-  const data = {
-    paging: {
-      page,
-      pages: page,
-      total: toNum(response.total, content.length),
-      hasReachedMax:
-        content.length === 0 ||
-        content.length < searchPageSize ||
-        (toNum(response.total, 0) > 0 &&
-          (page - 1) * searchPageSize + content.length >=
-            toNum(response.total, 0)),
-    },
-    items: content.map((item: any) => toComicItem(item)),
-  };
-
-  return {
-    source: JM_PLUGIN_ID,
-    extern: {
-      ...extern,
-      sortBy: toNum(extern.sortBy, 1),
-    },
-    scheme,
-    data,
-    paging: data.paging,
-    items: data.items,
-  };
+  return buildResult(content, toNum(response.total, content.length));
 }
 
 function buildHomeSectionAction(section: any) {
