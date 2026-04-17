@@ -78,16 +78,6 @@ export interface WasiApi {
   takeStderr(result: WasiRunResult): Promise<Uint8Array>;
 }
 
-export interface CacheApi {
-  set(key: string, value: unknown): unknown;
-  setIfAbsent(key: string, value: unknown): boolean;
-  compareAndSet(key: string, expected: unknown, value: unknown): boolean;
-  get<T = unknown>(key: string): T | unknown;
-  get<T>(key: string, fallback: T): T;
-  has(key: string): boolean;
-  delete(key: string): boolean;
-}
-
 export interface BridgeApi {
   gzipDecompress(
     input: Uint8Array | ArrayBuffer | ArrayBufferView | number[],
@@ -109,29 +99,11 @@ export interface BridgeApi {
     name: "compression.gzip_compress",
     input: Uint8Array | ArrayBuffer | ArrayBufferView | number[],
   ): Promise<number[]>;
-  call(name: "save_plugin_config", key: string, value: string): Promise<string>;
-  call(name: "load_plugin_config", key: string, value: string): Promise<string>;
-  call(
-    name: "plugin_config.save_plugin_config",
-    key: string,
-    value: string,
-  ): Promise<string>;
-  call(
-    name: "plugin_config.load_plugin_config",
-    key: string,
-    value: string,
-  ): Promise<string>;
   call(name: string, ...args: unknown[]): Promise<unknown>;
-}
-
-export interface HostPluginConfigApi {
-  savePluginConfig(key: string, value: string): Promise<string>;
-  loadPluginConfig(key: string, value: string): Promise<string>;
 }
 
 export interface HostRuntimeApi {
   bridge: BridgeApi;
-  pluginConfig: HostPluginConfigApi;
   [key: string]: unknown;
 }
 
@@ -161,31 +133,13 @@ export interface CryptoApi {
   randomBytes(size: number): Buffer;
 }
 
-export interface PluginInfo {
-  name: string;
-  version: string;
-  apiVersion: number;
-  description?: string;
-  [key: string]: unknown;
-}
-
-export interface PluginApi {
-  register(info: PluginInfo): PluginInfo;
-  getInfo(name: string): PluginInfo | null;
-  list(): PluginInfo[];
-  clear(): void;
-}
-
 declare global {
   var __web: HostRuntimeApi;
   var fs: FsApi | undefined;
   var path: PathApi | undefined;
-  var plugin: PluginApi | undefined;
   var native: NativeApi;
   var wasi: WasiApi;
-  var cache: CacheApi;
   var bridge: BridgeApi;
-  var pluginConfig: HostPluginConfigApi;
   var nodeCryptoCompat: CryptoApi;
   var uuidv4: () => string;
 }

@@ -128,7 +128,7 @@ export function createJmClient() {
         (decoded as Record<string, unknown>).jwttoken || "",
       ).trim();
       if (nextJwt) {
-        setJwtToken(nextJwt);
+        await setJwtToken(nextJwt);
       }
     }
 
@@ -137,7 +137,7 @@ export function createJmClient() {
       meta?.cacheEnabled &&
       String(cfg.method || "GET").toUpperCase() === "GET"
     ) {
-      setCachedResponse(
+      await setCachedResponse(
         {
           method: String(cfg.method || "GET").toUpperCase(),
           url: String(cfg.url || ""),
@@ -166,7 +166,7 @@ export function createJmClient() {
     const authHeaders: Record<string, string> = {
       token,
       tokenparam: `${meta.ts},${Config.JM_VERSION}`,
-      "user-agent": getUserAgent(),
+      "user-agent": await getUserAgent(),
     };
 
     const host = getHost(url);
@@ -175,7 +175,7 @@ export function createJmClient() {
     }
 
     if (meta.useJwt) {
-      const jwt = getJwtToken();
+      const jwt = await getJwtToken();
       if (jwt) {
         authHeaders.Authorization = `Bearer ${jwt}`;
       }
@@ -194,7 +194,7 @@ export function createJmClient() {
         data: cfg.data,
       };
       meta.cacheKey = cacheKeyFromConfig(cacheConfig);
-      const cached = getCachedResponse(cacheConfig);
+      const cached = await getCachedResponse(cacheConfig);
       if (cached !== null && cached !== undefined) {
         meta.fromCache = true;
         cfg.adapter = async () => ({
