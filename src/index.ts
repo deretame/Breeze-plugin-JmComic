@@ -7,6 +7,7 @@ import { buildPluginInfo } from "./get-info";
 import { buildRequestConfig } from "./request-config";
 import { getCachedResponse } from "./state";
 import type { RequestPayload } from "./types";
+import { pluginConfig } from "./tools";
 
 const JM_PLUGIN_ID = "bf99008d-010b-4f17-ac7c-61a9b57dc3d9";
 
@@ -35,7 +36,7 @@ async function jmRequest(input: RequestPayload) {
   const resolvedJwtToken =
     String(input.jwtToken ?? "").trim() ||
     String(await loadPluginSetting("auth.jwt", "")).trim();
-  const { config, cacheEnabled } = buildRequestConfig({
+  const { config, cacheEnabled } = await buildRequestConfig({
     ...input,
     jwtToken: resolvedJwtToken,
   });
@@ -48,7 +49,7 @@ async function jmRequest(input: RequestPayload) {
       cacheEnabled &&
       String(config.method || "GET").toUpperCase() === "GET"
     ) {
-      const cached = getCachedResponse({
+      const cached = await getCachedResponse({
         method: String(config.method || "GET").toUpperCase(),
         url: String(config.url || ""),
         params: config.params as Record<string, unknown> | undefined,
@@ -746,10 +747,7 @@ function sortByToOrder(value: unknown): string {
 }
 
 async function loadPluginSetting(key: string, fallback: unknown) {
-  const raw = await runtime.pluginConfig.loadPluginConfig(
-    key,
-    JSON.stringify(fallback),
-  );
+  const raw = await pluginConfig.load(key, JSON.stringify(fallback));
   try {
     const decoded = JSON.parse(String(raw));
     if (decoded?.ok === true) {
@@ -767,10 +765,7 @@ async function loadBlockedCategories(): Promise<string[]> {
 }
 
 async function saveBlockedCategories(values: string[]) {
-  await runtime.pluginConfig.savePluginConfig(
-    "search.blockedCategories",
-    JSON.stringify(values),
-  );
+  await pluginConfig.save("search.blockedCategories", JSON.stringify(values));
 }
 
 async function getSettingsBundle() {
@@ -832,11 +827,8 @@ async function getUserInfoBundle() {
       useJwt: false,
     })) as Record<string, any>;
     await Promise.all([
-      runtime.pluginConfig.savePluginConfig(
-        "auth.userInfo",
-        JSON.stringify(refreshed),
-      ),
-      runtime.pluginConfig.savePluginConfig(
+      pluginConfig.save("auth.userInfo", JSON.stringify(refreshed)),
+      pluginConfig.save(
         "auth.jwt",
         JSON.stringify(String(refreshed?.jwttoken ?? "")),
       ),
@@ -939,19 +931,10 @@ async function loginWithPassword(payload: JmLoginPayload = {}) {
 
   const jwtToken = String((result as any)?.jwttoken ?? "");
   await Promise.all([
-    runtime.pluginConfig.savePluginConfig(
-      "auth.account",
-      JSON.stringify(account),
-    ),
-    runtime.pluginConfig.savePluginConfig(
-      "auth.password",
-      JSON.stringify(password),
-    ),
-    runtime.pluginConfig.savePluginConfig("auth.jwt", JSON.stringify(jwtToken)),
-    runtime.pluginConfig.savePluginConfig(
-      "auth.userInfo",
-      JSON.stringify(result),
-    ),
+    pluginConfig.save("auth.account", JSON.stringify(account)),
+    pluginConfig.save("auth.password", JSON.stringify(password)),
+    pluginConfig.save("auth.jwt", JSON.stringify(jwtToken)),
+    pluginConfig.save("auth.userInfo", JSON.stringify(result)),
   ]);
 
   return {
@@ -1475,10 +1458,10 @@ async function getTimeRankingFilterBundle(payload: { tag?: string } = {}) {
 
 async function clearPluginSession() {
   await Promise.all([
-    runtime.pluginConfig.savePluginConfig("auth.account", JSON.stringify("")),
-    runtime.pluginConfig.savePluginConfig("auth.password", JSON.stringify("")),
-    runtime.pluginConfig.savePluginConfig("auth.jwt", JSON.stringify("")),
-    runtime.pluginConfig.savePluginConfig("auth.userInfo", JSON.stringify({})),
+    pluginConfig.save("auth.account", JSON.stringify("")),
+    pluginConfig.save("auth.password", JSON.stringify("")),
+    pluginConfig.save("auth.jwt", JSON.stringify("")),
+    pluginConfig.save("auth.userInfo", JSON.stringify({})),
   ]);
 
   return {
@@ -1492,8 +1475,6 @@ async function dumpRuntimeInfo() {
     ok: true,
     data: {
       pluginName: "jmComic",
-      hasCacheApi: !!runtime.cache,
-      hasPluginConfigApi: !!runtime.pluginConfig,
       now: new Date().toISOString(),
     },
   };

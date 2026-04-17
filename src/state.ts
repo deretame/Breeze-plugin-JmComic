@@ -1,50 +1,18 @@
-import type { CacheApi } from "../types/runtime-globals";
-import { getApi } from "../types/runtime-api";
 import { Config } from "./constants";
+import { cache } from "./tools";
 import type { CacheKeyConfig } from "./types";
 import { randomDeviceId } from "./utils";
 
 let fallbackDeviceId = "";
 let fallbackJwt = "";
 let fallbackUa = "";
-const inMemoryCache = new Map<string, unknown>();
 
-function getCache(): CacheApi | null {
-  return getApi("cache") ?? null;
+async function cacheSet(key: string, value: unknown) {
+  await cache.set(key, value);
 }
 
-function cacheGet<T>(key: string, fallback: T): T {
-  const c = getCache();
-  if (c) {
-    try {
-      return c.get<T>(key, fallback);
-    } catch {}
-  }
-
-  if (inMemoryCache.has(key)) {
-    return inMemoryCache.get(key) as T;
-  }
-  return fallback;
-}
-
-function cacheSet(key: string, value: unknown): void {
-  const c = getCache();
-  if (c) {
-    try {
-      c.set(key, value);
-    } catch {}
-  }
-  inMemoryCache.set(key, value);
-}
-
-function cacheDelete(key: string): void {
-  const c = getCache();
-  if (c) {
-    try {
-      c.delete(key);
-    } catch {}
-  }
-  inMemoryCache.delete(key);
+async function cacheDelete(key: string) {
+  await cache.delete(key);
 }
 
 function scopedKey(key: string): string {
@@ -52,16 +20,16 @@ function scopedKey(key: string): string {
   return `${Config.JM_CACHE_SCOPE}::${raw}`;
 }
 
-function getCachedString(key: string): string {
-  return String(cacheGet<string>(scopedKey(key), "") || "").trim();
+async function getCachedString(key: string) {
+  return String(await cache.get(scopedKey(key))).trim();
 }
 
-function setCachedString(key: string, value: string): void {
-  cacheSet(scopedKey(key), value);
+async function setCachedString(key: string, value: string) {
+  await cacheSet(scopedKey(key), value);
 }
 
-export function getDeviceId(): string {
-  const cached = getCachedString("device");
+export async function getDeviceId() {
+  const cached = await getCachedString("device");
   if (cached) {
     fallbackDeviceId = cached;
     return cached;
@@ -70,12 +38,12 @@ export function getDeviceId(): string {
   if (!fallbackDeviceId) {
     fallbackDeviceId = randomDeviceId();
   }
-  setCachedString("device", fallbackDeviceId);
+  await setCachedString("device", fallbackDeviceId);
   return fallbackDeviceId;
 }
 
-export function getJwtToken(): string {
-  const cached = getCachedString("jwt");
+export async function getJwtToken() {
+  const cached = await getCachedString("jwt");
   if (cached) {
     fallbackJwt = cached;
     return cached;
@@ -83,13 +51,13 @@ export function getJwtToken(): string {
   return fallbackJwt;
 }
 
-export function setJwtToken(token: string): void {
+export async function setJwtToken(token: string) {
   const normalized = String(token || "").trim();
   fallbackJwt = normalized;
-  setCachedString("jwt", normalized);
+  await setCachedString("jwt", normalized);
 }
 
-function generateAndroidUserAgent(deviceId: string): string {
+function generateAndroidUserAgent(deviceId: string) {
   const androidVersions = ["10", "11", "12", "13", "14", "15"];
   const chromeVersions = [
     "114.0.5735.196",
@@ -122,18 +90,18 @@ function generateAndroidUserAgent(deviceId: string): string {
   return `Mozilla/5.0 (Linux; Android ${android}; ${deviceId} Build/${build}; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/${chrome} Mobile Safari/537.36`;
 }
 
-export function getUserAgent(): string {
+export async function getUserAgent() {
   if (fallbackUa) return fallbackUa;
 
-  const cached = getCachedString("ua");
+  const cached = await getCachedString("ua");
   if (cached) {
     fallbackUa = cached;
     return cached;
   }
 
-  const ua = generateAndroidUserAgent(getDeviceId());
+  const ua = generateAndroidUserAgent(await getDeviceId());
   fallbackUa = ua;
-  setCachedString("ua", ua);
+  await setCachedString("ua", ua);
   return ua;
 }
 
@@ -146,31 +114,32 @@ export function cacheKeyFromConfig(config: CacheKeyConfig): string {
   return `${config.method}|${config.url}|${q}|${body}`;
 }
 
-export function getCachedResponse(config: CacheKeyConfig): unknown | null {
+export async function getCachedResponse(config: CacheKeyConfig) {
   const key = cacheKeyFromConfig(config);
   const storeKey = scopedKey(`resp:${key}`);
-  const raw = cacheGet<{ expireAt?: number; value?: unknown } | null>(
-    storeKey,
-    null,
-  );
+  const raw = (await cache.get(storeKey, null)) as {
+    expireAt?: number;
+    value?: unknown;
+  } | null;
+
   if (!raw || typeof raw !== "object") return null;
 
   const expireAt = Number(raw.expireAt || 0);
   if (!Number.isFinite(expireAt) || Date.now() > expireAt) {
-    cacheDelete(storeKey);
+    await cacheDelete(storeKey);
     return null;
   }
 
   return raw.value ?? null;
 }
 
-export function setCachedResponse(
+export async function setCachedResponse(
   config: CacheKeyConfig,
   value: unknown,
-): void {
+) {
   const key = cacheKeyFromConfig(config);
   try {
-    cacheSet(scopedKey(`resp:${key}`), {
+    await cacheSet(scopedKey(`resp:${key}`), {
       expireAt: Date.now() + 10 * 60 * 1000,
       value,
     });

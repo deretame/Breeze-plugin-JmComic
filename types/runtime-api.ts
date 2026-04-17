@@ -1,14 +1,11 @@
 import type {
   BridgeApi,
-  CacheApi,
   CryptoApi,
   FsApi,
-  HostPluginConfigApi,
   NativeApi,
   PathApi,
-  PluginApi,
   WasiApi,
-} from "./runtime-globals";
+} from "../types/runtime-globals";
 
 export interface RuntimeApiSet {
   Headers: typeof Headers;
@@ -21,10 +18,7 @@ export interface RuntimeApiSet {
   FSError: new (message?: string, code?: string, path?: string) => Error;
   native: NativeApi;
   wasi: WasiApi;
-  cache: CacheApi;
   bridge: BridgeApi;
-  pluginConfig: HostPluginConfigApi;
-  plugin: PluginApi;
   path: PathApi;
   URL: typeof URL;
   URLSearchParams: typeof URLSearchParams;
@@ -111,10 +105,7 @@ export function getRuntimeApis(): Partial<RuntimeApiSet> {
     FSError: getApi("FSError"),
     native: getApi("native"),
     wasi: getApi("wasi"),
-    cache: getApi("cache"),
     bridge: getApi("bridge"),
-    pluginConfig: getApi("pluginConfig"),
-    plugin: getApi("plugin"),
     path: getApi("path"),
     URL: getApi("URL"),
     URLSearchParams: getApi("URLSearchParams"),
@@ -162,17 +153,8 @@ export const runtime = {
   get wasi() {
     return requireApi("wasi");
   },
-  get cache() {
-    return requireApi("cache");
-  },
   get bridge() {
     return requireApi("bridge");
-  },
-  get pluginConfig() {
-    return requireApi("pluginConfig");
-  },
-  get plugin() {
-    return requireApi("plugin");
   },
   get path() {
     return requireApi("path");

@@ -2,10 +2,10 @@ import { setJwtToken } from "./state";
 import type { JmRequestConfig, RequestPayload } from "./types";
 import { nowTs, toQueryString } from "./utils";
 
-export function buildRequestConfig(input: RequestPayload): {
+export async function buildRequestConfig(input: RequestPayload): Promise<{
   config: JmRequestConfig;
   cacheEnabled: boolean;
-} {
+}> {
   const method = String(input.method || "GET").toUpperCase();
   const url = String(input.path || input.url || "").trim();
   if (!url) {
@@ -15,7 +15,7 @@ export function buildRequestConfig(input: RequestPayload): {
   const headers: Record<string, string> = {};
   const inputJwt = String(input.jwtToken || "").trim();
   if (inputJwt) {
-    setJwtToken(inputJwt);
+    await setJwtToken(inputJwt);
   }
 
   let body = input.data;
