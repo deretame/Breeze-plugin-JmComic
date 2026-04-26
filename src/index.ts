@@ -7,7 +7,7 @@ import { buildPluginInfo } from "./get-info";
 import { buildRequestConfig } from "./request-config";
 import { getCachedResponse } from "./state";
 import type { RequestPayload } from "./types";
-import { pluginConfig } from "./tools";
+import { flutterTools, pluginConfig } from "./tools";
 
 const JM_PLUGIN_ID = "bf99008d-010b-4f17-ac7c-61a9b57dc3d9";
 
@@ -982,26 +982,70 @@ async function resolveFastestBases() {
 }
 
 async function tryJmCheckin() {
-  const checkinPaths = [
-    `${Config.baseUrl}/user/checkin`,
-    `${Config.baseUrl}/user/check-in`,
-    `${Config.baseUrl}/checkin`,
-  ];
+  const stored = await loadPluginSetting("auth.userInfo", {});
+  const uid = stored?.uid;
+  if (!uid) {
+    console.error("无法获取用户UID，跳过签到");
+    return false;
+  }
 
-  for (const path of checkinPaths) {
+  const maxRetries = 3;
+  let retryCount = 0;
+
+  while (retryCount <= maxRetries) {
     try {
-      await jmRequest({
-        path,
+      const dailyListRes = await jmRequest({
+        url: `${Config.baseUrl}/daily_list/filter`,
         method: "POST",
-        formData: {},
-        cache: false,
-        useJwt: true,
+        formData: {
+          data: String(new Date().getFullYear()),
+        },
       });
+
+      const list = dailyListRes?.data?.list ?? dailyListRes?.list ?? [];
+      if (!Array.isArray(list) || list.length === 0) {
+        console.log("今日无签到项");
+        return true;
+      }
+
+      const lastItem = list[list.length - 1];
+      const dailyId = lastItem?.id;
+      if (!dailyId) {
+        throw new Error("无法获取 dailyId");
+      }
+
+      const chkRes = await jmRequest({
+        url: `${Config.baseUrl}/daily_chk`,
+        method: "POST",
+        formData: {
+          user_id: uid,
+          daily_id: dailyId,
+        },
+      });
+
+      const msg = chkRes?.data?.msg ?? chkRes?.msg ?? "";
+
+      if (msg !== "今天已经签到过了") {
+        try {
+          flutterTools.showToast({
+            message: "禁漫自动签到成功！",
+            level: "success",
+          });
+        } catch (_) {}
+      }
+
       return true;
-    } catch (_) {
-      // try next path
+    } catch (error) {
+      console.error("签到出错", error);
+      retryCount++;
+      if (retryCount > maxRetries) {
+        console.error("禁漫签到失败");
+        return false;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   }
+
   return false;
 }
 
@@ -1023,11 +1067,13 @@ async function runJmAuthAndCheckInLoop() {
           return;
         }
 
-        await loginWithPassword({
+        const data = await loginWithPassword({
           account,
           password,
           path: `${Config.baseUrl}/login`,
         });
+
+        console.info(data);
 
         const checkedIn = await tryJmCheckin();
         if (!checkedIn) {
