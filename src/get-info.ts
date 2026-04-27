@@ -18,7 +18,7 @@ export function buildPluginInfo(input: BuildPluginInfoInput) {
       describe: "",
     },
     describe: "禁漫天堂插件",
-    version: "0.0.1",
+    version: "0.0.2",
     home: "https://github.com/deretame/Breeze-plugin-JmComic",
     updateUrl:
       "https://api.github.com/repos/deretame/Breeze-plugin-JmComic/releases/latest",
