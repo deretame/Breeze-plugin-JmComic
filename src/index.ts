@@ -791,7 +791,7 @@ async function getSettingsBundle() {
       ],
     },
     data: {
-      canShowUserInfo: false,
+      canShowUserInfo: true,
       values: {
         "auth.account": String(account ?? ""),
         "auth.password": String(password ?? ""),
