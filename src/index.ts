@@ -1,13 +1,13 @@
 import axios from "axios";
 import { runtime } from "../types/runtime-api";
-import { Config } from "./constants";
 import { createJmClient, setUnauthorizedSchemeProvider } from "./client";
+import { Config } from "./constants";
 import { toFriendlyError } from "./errors";
 import { buildPluginInfo } from "./get-info";
 import { buildRequestConfig } from "./request-config";
 import { getCachedResponse } from "./state";
-import type { RequestPayload } from "./types";
 import { flutterTools, pluginConfig } from "./tools";
+import type { RequestPayload } from "./types";
 
 const JM_PLUGIN_ID = "bf99008d-010b-4f17-ac7c-61a9b57dc3d9";
 
@@ -2279,6 +2279,10 @@ async function toggleLike(payload: JmLikePayload = {}) {
 
   const currentLiked = toBool(payload.currentLiked, false);
   if (currentLiked) {
+    flutterTools.showToast({
+      message: "JM 暂不支持取消点赞",
+      level: "warning",
+    });
     return {
       liked: true,
       message: "JM 暂不支持取消点赞",
@@ -2307,7 +2311,7 @@ async function toggleFavorite(payload: JmToggleFavoritePayload = {}) {
   }
 
   const path = `${Config.baseUrl}/favorite`;
-  await jmRequest({
+  const res = await jmRequest({
     path,
     method: "POST",
     formData: { aid: comicId },
@@ -2316,7 +2320,14 @@ async function toggleFavorite(payload: JmToggleFavoritePayload = {}) {
     jwtToken: payload.jwtToken,
   });
 
+  console.debug("res", res);
+
+  if (res?.msg?.includes("已满")) {
+    flutterTools.showToast({ message: "收藏数已达上限", level: "warning" });
+  }
+
   const favorited = !toBool(payload.currentFavorite, false);
+
   return {
     favorited,
     nextStep: favorited ? "selectFolder" : "none",

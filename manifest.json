@@ -7,7 +7,7 @@
     "describe": ""
   },
   "describe": "禁漫天堂插件",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "home": "https://github.com/deretame/Breeze-plugin-JmComic",
   "updateUrl": "https://api.github.com/repos/deretame/Breeze-plugin-JmComic/releases/latest",
   "function": [
