@@ -67,16 +67,20 @@ async function decryptDataField(
     return null;
   }
 
-  try {
-    const key = await md5Hex(`${tsRaw}${Config.JM_SECRET}`);
-    const text = await hostAesEcbPkcs7DecryptB64(payload, key);
-    if (!text.trim()) {
-      return null;
+  for (const seed of Config.JM_SETTING_AES_SEEDS) {
+    try {
+      const key = await md5Hex(`${tsRaw}${seed}`);
+      const text = await hostAesEcbPkcs7DecryptB64(payload, key);
+      if (!text.trim()) {
+        continue;
+      }
+      return tryParseJson(text.trim()) ?? text;
+    } catch {
+      // try next key
     }
-    return tryParseJson(text.trim()) ?? text;
-  } catch {
-    return null;
   }
+
+  return null;
 }
 
 async function normalizeRawResponse(raw: unknown): Promise<unknown> {
