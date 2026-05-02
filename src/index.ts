@@ -2,12 +2,19 @@ import axios from "axios";
 import { runtime } from "../types/runtime-api";
 import { createJmClient, setUnauthorizedSchemeProvider } from "./client";
 import { Config } from "./constants";
+import { decodeResponsePayload } from "./codec";
 import { toFriendlyError } from "./errors";
 import { buildPluginInfo } from "./get-info";
+import { hostAesEcbPkcs7DecryptB64 } from "./host-bridge";
 import { buildRequestConfig } from "./request-config";
-import { getCachedResponse } from "./state";
+import {
+  getCachedResponse,
+  getRuntimeEndpointCache,
+  setRuntimeEndpointCache,
+} from "./state";
 import { flutterTools, pluginConfig } from "./tools";
 import type { RequestPayload } from "./types";
+import { md5Hex } from "./utils";
 
 const JM_PLUGIN_ID = "bf99008d-010b-4f17-ac7c-61a9b57dc3d9";
 
@@ -961,7 +968,130 @@ function waitMs(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
+function normalizeBaseBaseUrl(url: string): string {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("http://") || raw.startsWith("https://")) {
+    return raw.replace(/\/+$/g, "");
+  }
+  return `https://${raw}`.replace(/\/+$/g, "");
+}
+
+async function fetchTextFromAny(urls: string[]) {
+  let lastError: unknown = null;
+  for (const url of urls) {
+    try {
+      const response = await axios.get(url, {
+        timeout: 8000,
+        responseType: "text",
+        validateStatus: () => true,
+      });
+      if (response.status >= 200 && response.status < 300) {
+        return String(response.data ?? "");
+      }
+      lastError = new Error(`status=${response.status} url=${url}`);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error("host config urls unavailable");
+}
+
+async function loadHostPool(): Promise<string[]> {
+  const raw = await fetchTextFromAny(Config.JM_HOST_CONFIG_URLS);
+  const normalized = raw.replace(/[^A-Za-z0-9+/=]/g, "");
+  const key = await md5Hex(Config.JM_HOSTCFG_AES_SEED);
+  const plain = await hostAesEcbPkcs7DecryptB64(normalized, key);
+  const parsed = JSON.parse(String(plain || "{}")) as { Server?: unknown };
+  if (!Array.isArray(parsed.Server)) return [];
+  return parsed.Server.map((item) => String(item || "").trim()).filter(Boolean);
+}
+
+async function fetchSettingFromDomain(domain: string, tsSec: string) {
+  const url = `${normalizeBaseBaseUrl(domain)}/setting?app_img_shunt=1&t=${tsSec}`;
+  const token = await md5Hex(`${tsSec}${Config.JM_SECRET}`);
+  const response = await axios.get(url, {
+    timeout: 8000,
+    validateStatus: () => true,
+    headers: {
+      Tokenparam: `${tsSec},${Config.JM_VERSION}`,
+      Token: token,
+    },
+  });
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`status=${response.status}`);
+  }
+  const decoded = (await decodeResponsePayload(response.data, tsSec)) as Record<
+    string,
+    unknown
+  > | null;
+  if (!decoded || typeof decoded !== "object") {
+    throw new Error("decode setting response failed");
+  }
+  return decoded;
+}
+
+async function resolveDynamicHosts() {
+  const hostPool = await loadHostPool();
+  if (!hostPool.length) {
+    throw new Error("empty host pool");
+  }
+
+  const tsSec = String(Math.floor(Date.now() / 1000));
+  let picked = "";
+  let setting: Record<string, unknown> | null = null;
+  for (const domain of hostPool) {
+    try {
+      setting = await fetchSettingFromDomain(domain, tsSec);
+      picked = normalizeBaseBaseUrl(domain);
+      if (setting) break;
+    } catch {
+      // try next domain
+    }
+  }
+
+  if (!setting) {
+    throw new Error("all setting endpoints failed");
+  }
+
+  const imageBaseUrl = normalizeBaseBaseUrl(String(setting.img_host ?? ""));
+  const rawBaseUrls = [
+    picked,
+    ...hostPool.map((item) => normalizeBaseBaseUrl(item)),
+  ].filter(Boolean);
+
+  return {
+    imageBaseUrl: imageBaseUrl || Config.JM_FALLBACK_IMAGE_BASE,
+    baseUrls: Array.from(new Set(rawBaseUrls)),
+  };
+}
+
 async function resolveFastestBases() {
+  const cached = await getRuntimeEndpointCache();
+  if (cached) {
+    Config.baseUrls = [cached.apiBaseUrl];
+    Config.imagesUrls = [cached.imageBaseUrl];
+    Config.baseUrlIndex = 0;
+    Config.imagesUrlIndex = 0;
+    return { data: cached.apiBaseUrl };
+  }
+
+  let baseCandidates = [Config.JM_FALLBACK_API_BASE];
+  let imageCandidate = Config.JM_FALLBACK_IMAGE_BASE;
+  try {
+    const dynamic = await resolveDynamicHosts();
+    baseCandidates =
+      dynamic.baseUrls.length > 0
+        ? dynamic.baseUrls
+        : [Config.JM_FALLBACK_API_BASE];
+    imageCandidate = dynamic.imageBaseUrl || Config.JM_FALLBACK_IMAGE_BASE;
+  } catch (error) {
+    console.warn("[jm.init] resolve dynamic hosts failed", error);
+  }
+
+  Config.baseUrls = baseCandidates;
+  Config.imagesUrls = [imageCandidate];
+
   try {
     const apiIdx = await getFastestUrlIndex(Config.baseUrls);
     Config.baseUrlIndex = apiIdx;
@@ -976,7 +1106,21 @@ async function resolveFastestBases() {
     console.warn("[jm.init] choose fastest image base failed", error);
   }
 
-  let data = Config.baseUrl;
+  const data = Config.baseUrl || Config.JM_FALLBACK_API_BASE;
+  Config.baseUrls = [data];
+  Config.baseUrlIndex = 0;
+  Config.imagesUrls = [Config.imagesUrl || Config.JM_FALLBACK_IMAGE_BASE];
+  Config.imagesUrlIndex = 0;
+
+  try {
+    await setRuntimeEndpointCache({
+      apiBaseUrl: Config.baseUrl,
+      imageBaseUrl: Config.imagesUrl,
+      hostPool: baseCandidates,
+    });
+  } catch (error) {
+    console.warn("[jm.init] cache runtime endpoints failed", error);
+  }
 
   return { data };
 }
@@ -1108,7 +1252,7 @@ async function init() {
     data: {
       ok: true,
       started: true,
-      runtimeImageBaseUrl: Config.baseUrl,
+      runtimeImageBaseUrl: Config.imagesUrl,
       fastestApiBase: Config.baseUrl,
     },
   };

@@ -7,6 +7,13 @@ let fallbackDeviceId = "";
 let fallbackJwt = "";
 let fallbackUa = "";
 
+type RuntimeEndpointCache = {
+  apiBaseUrl: string;
+  imageBaseUrl: string;
+  hostPool: string[];
+  updatedAt: number;
+};
+
 async function cacheSet(key: string, value: unknown) {
   await cache.set(key, value);
 }
@@ -146,4 +153,41 @@ export async function setCachedResponse(
   } catch (err) {
     console.error("setCachedResponse failed", err);
   }
+}
+
+export async function getRuntimeEndpointCache(
+  ttlMs = 30 * 60 * 1000,
+): Promise<RuntimeEndpointCache | null> {
+  const raw = (await cache.get(
+    scopedKey("runtime:endpoints"),
+    null,
+  )) as RuntimeEndpointCache | null;
+  if (!raw || typeof raw !== "object") return null;
+
+  const apiBaseUrl = String(raw.apiBaseUrl || "").trim();
+  const imageBaseUrl = String(raw.imageBaseUrl || "").trim();
+  const hostPool = Array.isArray(raw.hostPool)
+    ? raw.hostPool.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const updatedAt = Number(raw.updatedAt || 0);
+
+  if (!apiBaseUrl || !imageBaseUrl || !Number.isFinite(updatedAt)) return null;
+  if (Date.now() - updatedAt > ttlMs) return null;
+
+  return { apiBaseUrl, imageBaseUrl, hostPool, updatedAt };
+}
+
+export async function setRuntimeEndpointCache(input: {
+  apiBaseUrl: string;
+  imageBaseUrl: string;
+  hostPool: string[];
+}) {
+  await cacheSet(scopedKey("runtime:endpoints"), {
+    apiBaseUrl: String(input.apiBaseUrl || "").trim(),
+    imageBaseUrl: String(input.imageBaseUrl || "").trim(),
+    hostPool: Array.isArray(input.hostPool)
+      ? input.hostPool.map((item) => String(item || "").trim()).filter(Boolean)
+      : [],
+    updatedAt: Date.now(),
+  });
 }
