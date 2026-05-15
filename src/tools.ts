@@ -1,8 +1,12 @@
 export const cache = {
   get: (key: string, fallback: unknown = null): Promise<unknown> =>
     bridge.call("cache.get", key, fallback),
+  getSync: (key: string, fallback: unknown = null): unknown =>
+    bridge.call("cache.get.sync", key, fallback),
   set: (key: string, value: unknown) =>
     bridge.call("cache.set", key, value) as Promise<boolean>,
+  setSync: (key: string, value: unknown) =>
+    bridge.call("cache.set.sync", key, value) as Promise<boolean>,
   setIfAbsent: (key: string, value: unknown) =>
     bridge.call("cache.set_if_absent", key, value) as Promise<boolean>,
   compareAndSet: (key: string, expected: unknown, next: unknown) =>
@@ -20,6 +24,27 @@ export const pluginConfig = {
     bridge.call("save_plugin_config", key, value) as Promise<string>,
   load: (key: string, fallback = "") =>
     bridge.call("load_plugin_config", key, fallback) as Promise<string>,
+};
+
+export const runtime = {
+  gc: () => bridge.call("runtime.gc") as Promise<void>,
+  isTaskGroupCancelled: (taskGroupKey: string) =>
+    bridge.call(
+      "runtime.is_task_group_cancelled",
+      taskGroupKey,
+    ) as Promise<boolean>,
+};
+
+export const opencc = {
+  convert: (
+    text: string,
+    config: "s2t" | "t2s" | "s2tw" | "tw2s" | "s2hk" | "hk2s",
+  ) => {
+    return bridge.call(
+      "opencc.convert",
+      JSON.stringify({ text, config }),
+    ) as Promise<string>;
+  },
 };
 
 interface ToastOptions {
