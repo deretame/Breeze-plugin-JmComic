@@ -38,12 +38,15 @@ export const runtime = {
 export const opencc = {
   convert: (
     text: string,
-    config: "s2t" | "t2s" | "s2tw" | "tw2s" | "s2hk" | "hk2s",
+    config:
+      | "s2t.json"
+      | "t2s.json"
+      | "s2tw.json"
+      | "tw2s.json"
+      | "s2hk.json"
+      | "hk2s.json",
   ) => {
-    return bridge.call(
-      "opencc.convert",
-      JSON.stringify({ text, config }),
-    ) as Promise<string>;
+    return bridge.call("opencc.convert", { text, config }) as Promise<string>;
   },
 };
 

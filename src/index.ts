@@ -12,7 +12,7 @@ import {
   getRuntimeEndpointCache,
   setRuntimeEndpointCache,
 } from "./state";
-import { flutterTools, pluginConfig } from "./tools";
+import { flutterTools, opencc, pluginConfig } from "./tools";
 import type { RequestPayload } from "./types";
 import { md5Hex } from "./utils";
 
@@ -735,10 +735,17 @@ function getCurrentWeekRankingValue(): string {
   }
 }
 
-function normalizeHomeSectionTitle(value: unknown): string {
-  const title = String(value ?? "");
-  if (title !== "连载更新→右滑看更多→") {
-    return title;
+async function normalizeHomeSectionTitle(value: unknown): Promise<string> {
+  const title = String(value ?? "").trim();
+  if (!title) {
+    return "";
+  }
+
+  const normalizedTitle = String(
+    await opencc.convert(title, "t2s.json"),
+  ).trim();
+  if (normalizedTitle !== "连载更新→右滑看更多→") {
+    return normalizedTitle;
   }
 
   const weekMap = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
@@ -1167,7 +1174,9 @@ async function tryJmCheckin() {
         },
       });
 
-      const msg = chkRes?.data?.msg ?? chkRes?.msg ?? "";
+      let msg = String(chkRes?.data?.msg ?? chkRes?.msg ?? "");
+
+      msg = await opencc.convert(msg, "t2s.json");
 
       if (msg !== "今天已经签到过了") {
         try {
@@ -1424,33 +1433,19 @@ async function getFunctionPage(payload: Record<string, unknown> = {}) {
   }
 
   const recommend = await getHomeRecommendData();
+  console.log(
+    JSON.stringify(recommend, (key, value) =>
+      key === "items" || key === "raw" ? undefined : value,
+    ),
+  );
   const sections = Array.isArray((recommend as any)?.data?.sections)
     ? (recommend as any).data.sections
     : [];
 
   const pickedSections = sections
     .filter((section: any) => {
-      const action = toStringMap(section?.action);
-      if (String(action.type ?? "") !== "openComicList") {
-        return false;
-      }
-
-      const scene = toStringMap(toStringMap(action.payload).scene);
-      const list = toStringMap(scene.list);
-      const filter = toStringMap(scene.filter);
-      const listFn = String(list.fnPath ?? "").trim();
-      const filterFn = String(filter.fnPath ?? "").trim();
-      const tag = String(toStringMap(filter.core).tag ?? "").trim();
-
-      if (listFn === "getWeekRankingData") {
-        return true;
-      }
-
-      return (
-        listFn === "getRankingData" &&
-        filterFn === "getTimeRankingFilterBundle" &&
-        ["禁漫汉化组", "hanManTypeMap", "qiTaLeiTypeMap"].includes(tag)
-      );
+      const title = String(section?.title ?? "").trim();
+      return title !== "禁漫小說" && title !== "禁漫書庫";
     })
     .map((section: any) => ({
       id: String(section?.id ?? ""),
@@ -1465,6 +1460,12 @@ async function getFunctionPage(payload: Record<string, unknown> = {}) {
       items: Array.isArray(section?.items) ? section.items : [],
       raw: section?.raw ?? section,
     }));
+
+  console.log(
+    JSON.stringify(pickedSections, (key, value) =>
+      key === "items" || key === "raw" ? undefined : value,
+    ),
+  );
 
   return {
     source: JM_PLUGIN_ID,
@@ -1956,27 +1957,34 @@ async function searchComic(payload: JmSearchPayload = {}) {
 }
 
 function buildHomeSectionAction(section: any) {
-  const title = String(section?.title ?? "");
-  const id = toNum(section?.id);
+  const title = String(section?.title ?? "").trim();
+  const id = String(section?.id ?? "").trim();
 
-  if (title.includes("推荐")) {
+  if (
+    title.includes("推荐") ||
+    title.includes("推薦") ||
+    id === "30" ||
+    title === "禁漫去码&全彩化" ||
+    title === "禁漫去碼&全彩化"
+  ) {
     return openComicListAction(
       buildComicListScene({
         title,
         list: {
           fnPath: "getPromoteListData",
           core: {
-            id,
+            id: toNum(id),
             path: `${Config.baseUrl}/promote_list`,
           },
           extern: {
             source: "promoteList",
+            pages: 27,
           },
         },
       }),
     );
   }
-  if (title === "连载更新→右滑看更多→") {
+  if (id === "26" || title.endsWith("连载更新")) {
     return openComicListAction(
       buildComicListScene({
         title: "每周连载更新",
@@ -1991,7 +1999,7 @@ function buildHomeSectionAction(section: any) {
       }),
     );
   }
-  if (title === "禁漫汉化组") {
+  if (id === "998" || title === "禁漫汉化组") {
     return openComicListAction(
       buildComicListScene({
         title,
@@ -2007,7 +2015,7 @@ function buildHomeSectionAction(section: any) {
       }),
     );
   }
-  if (title === "韩漫更新") {
+  if (id === "999" || title === "韩漫更新") {
     return openComicListAction(
       buildComicListScene({
         title,
@@ -2023,7 +2031,7 @@ function buildHomeSectionAction(section: any) {
       }),
     );
   }
-  if (title === "其他更新") {
+  if (id === "1000" || title === "其他更新") {
     return openComicListAction(
       buildComicListScene({
         title,
@@ -2060,18 +2068,21 @@ async function getHomeRecommendData(payload: JmHomePayload = {}) {
     jwtToken: payload.jwtToken,
   });
 
-  const sections = (Array.isArray(promote) ? promote : [])
+  const normalizedSections = await Promise.all(
+    (Array.isArray(promote) ? promote : []).map(async (section: any) => ({
+      ...section,
+      title: await normalizeHomeSectionTitle(section?.title),
+    })),
+  );
+
+  const sections = normalizedSections
     .filter((section: any) => {
       const title = String(section?.title ?? "");
-      return (
-        title !== "禁漫书库" &&
-        title !== "禁漫去码&全彩化" &&
-        title !== "禁漫小说"
-      );
+      return title !== "禁漫书库" && title !== "禁漫小说";
     })
     .map((section: any) => ({
       id: String(section?.id ?? ""),
-      title: normalizeHomeSectionTitle(section?.title),
+      title: String(section?.title ?? ""),
       subtitle: "",
       action: buildHomeSectionAction(section),
       body: {
@@ -2133,63 +2144,6 @@ async function getHomeLatestData(payload: JmHomePayload = {}) {
   };
 }
 
-async function getHomeData(payload: JmHomePayload = {}) {
-  const page = Number.isFinite(Number(payload.page))
-    ? Number(payload.page)
-    : -1;
-  const scheme = {
-    version: "1.0.0",
-    type: "page",
-    title: "禁漫首页",
-    body: {
-      type: "list",
-      direction: "vertical",
-      children: [
-        {
-          type: "comic-section-list",
-          key: "sections",
-        },
-        {
-          type: "comic-grid",
-          key: "suggestionItems",
-          title: "最新上传",
-        },
-      ],
-    },
-  };
-
-  if (page <= -1) {
-    const [recommend, latest] = await Promise.all([
-      getHomeRecommendData(payload),
-      getHomeLatestData({ ...payload, page: 0 }),
-    ]);
-    return {
-      source: JM_PLUGIN_ID,
-      extern: payload.extern ?? null,
-      scheme,
-      data: {
-        page,
-        sections: (recommend as any)?.data?.sections ?? [],
-        suggestionItems: (latest as any)?.data?.suggestionItems ?? [],
-        hasReachedMax: Boolean((latest as any)?.data?.hasReachedMax),
-      },
-    };
-  }
-
-  const latest = await getHomeLatestData({ ...payload, page });
-  return {
-    source: JM_PLUGIN_ID,
-    extern: payload.extern ?? null,
-    scheme,
-    data: {
-      page,
-      sections: [],
-      suggestionItems: (latest as any)?.data?.suggestionItems ?? [],
-      hasReachedMax: Boolean((latest as any)?.data?.hasReachedMax),
-    },
-  };
-}
-
 async function getRankingData(payload: JmRankingPayload = {}) {
   const page = Number.isFinite(Number(payload.page)) ? Number(payload.page) : 0;
   const extern = toStringMap(payload.extern);
@@ -2236,10 +2190,11 @@ async function getRankingData(payload: JmRankingPayload = {}) {
 }
 
 async function getPromoteListData(payload: JmPromoteListPayload = {}) {
+  console.debug(payload);
   const id = toNum(payload.id, 0);
   const page = Math.max(0, toNum(payload.page, 0));
   const path = `${Config.baseUrl}/promote_list`;
-  const pageSize = 80;
+  const pageSize = 27;
 
   const raw = (await jmRequest({
     path,
@@ -2273,41 +2228,6 @@ async function getPromoteListData(payload: JmPromoteListPayload = {}) {
       hasReachedMax,
       items: list.map((item: any) => toComicItem(item)),
       raw,
-    },
-  };
-}
-
-async function getRecommendData(payload: JmPromoteListPayload = {}) {
-  const recommend = await getHomeRecommendData({
-    path: undefined,
-    useJwt: payload.useJwt,
-    jwtToken: payload.jwtToken,
-  });
-
-  const sections = Array.isArray((recommend as any)?.data?.sections)
-    ? (recommend as any).data.sections
-    : [];
-  const topSection = sections.find(
-    (section: any) =>
-      Array.isArray(section?.items) &&
-      section.items.length > 0 &&
-      String(section?.title ?? "").trim().length > 0,
-  );
-  const items = Array.isArray(topSection?.items) ? topSection.items : [];
-
-  return {
-    source: JM_PLUGIN_ID,
-    extern: payload.extern ?? null,
-    scheme: {
-      version: "1.0.0",
-      type: "recommendFeed",
-      card: "comic",
-    },
-    data: {
-      page: 1,
-      hasReachedMax: true,
-      items,
-      raw: recommend,
     },
   };
 }
@@ -2353,6 +2273,8 @@ async function getLatestData(payload: JmRankingPayload = {}) {
     useJwt: payload.useJwt ?? true,
     jwtToken: payload.jwtToken,
   });
+
+  console.debug(raw);
 
   const list = Array.isArray(raw) ? raw : [];
   return {
@@ -2630,7 +2552,7 @@ async function getWeekRankingData(payload: JmWeekRankingPayload = {}) {
   const type = String(payload.type ?? "all");
   const page = Math.max(1, toNum(payload.page, 1));
   const path = `${Config.baseUrl}/serialization`;
-  const pageSize = 80;
+  const pageSize = 40;
 
   const raw = await jmRequest({
     path,
@@ -2753,7 +2675,6 @@ async function getChapter(payload: JmChapterPayload = {}) {
       extern: {},
     },
   };
-  console.debug(result);
   return result;
 }
 
@@ -2926,7 +2847,6 @@ async function getReadSnapshot(payload: JmReadSnapshotPayload = {}) {
       chapters: chapterRefs,
     },
   };
-  console.debug(result.data.chapter);
   return result;
 }
 
@@ -2980,12 +2900,9 @@ export default {
   getTimeRankingFilterBundle,
   clearPluginSession,
   dumpRuntimeInfo,
-  getHomeData,
-  getHomeRecommendData,
   getHomeLatestData,
   getRankingData,
   getPromoteListData,
-  getRecommendData,
   getLatestData,
   getCloudFavoriteData,
   getCommentFeed,
