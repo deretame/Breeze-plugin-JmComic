@@ -1,8 +1,8 @@
 import axios from "axios";
 import { runtime } from "../types/runtime-api";
 import { createJmClient, setUnauthorizedSchemeProvider } from "./client";
-import { Config } from "./constants";
 import { decodeResponsePayload } from "./codec";
+import { Config } from "./constants";
 import { toFriendlyError } from "./errors";
 import { buildPluginInfo } from "./get-info";
 import { hostAesEcbPkcs7DecryptB64 } from "./host-bridge";
@@ -284,12 +284,12 @@ function buildMetadata(type: string, name: string, value: unknown) {
 function createActionItem(
   name: unknown,
   onTap: Record<string, unknown> = {},
-  extension: Record<string, unknown> = {},
+  extern: Record<string, unknown> = {},
 ) {
   return {
     name: String(name ?? ""),
     onTap,
-    extension,
+    extern,
   };
 }
 
@@ -321,14 +321,14 @@ function createImage(input: {
   url: unknown;
   name?: unknown;
   path?: unknown;
-  extension?: Record<string, unknown>;
+  extern?: Record<string, unknown>;
 }) {
   return {
     id: String(input.id ?? ""),
     url: String(input.url ?? ""),
     name: String(input.name ?? ""),
     path: String(input.path ?? ""),
-    extension: input.extension ?? {},
+    extern: input.extern ?? {},
   };
 }
 
@@ -1410,10 +1410,6 @@ async function getCloudFavoriteSceneBundle() {
   };
 }
 
-async function get_cloud_favorite_scene_bundle() {
-  return getCloudFavoriteSceneBundle();
-}
-
 async function getInfo() {
   return buildPluginInfo({
     buildLatestScene: buildJmLatestScene,
@@ -1487,10 +1483,6 @@ async function getFunctionPage(payload: Record<string, unknown> = {}) {
       hasReachedMax: true,
     },
   };
-}
-
-async function get_function_page(payload: Record<string, unknown> = {}) {
-  return getFunctionPage(payload);
 }
 
 async function getComicListSceneBundle() {
@@ -1576,10 +1568,6 @@ async function getAdvancedSearchScheme(
       },
     },
   };
-}
-
-async function get_advanced_search_scheme() {
-  return getAdvancedSearchScheme();
 }
 
 async function getWeekRankingFilterBundle() {
@@ -1740,14 +1728,14 @@ async function getComicDetail(payload: ComicDetailPayload = {}) {
           name: "",
         }),
         onTap: {},
-        extension: {},
+        extern: {},
       },
       description: normalizedInfo.description,
       cover: createImage({
         id: String(normalizedInfo.id),
         url: buildJmCoverUrl(normalizedInfo),
         path: `${normalizedInfo.id}.jpg`,
-        extension: {},
+        extern: {},
       }),
       metadata: [
         createMetadataActionList(
@@ -1787,14 +1775,17 @@ async function getComicDetail(payload: ComicDetailPayload = {}) {
             ),
         ),
       ].filter(Boolean),
-      extension: {},
+      extern: {},
     },
     eps: (() => {
       const mapped = normalizedInfo.series.map((item: any) => ({
         id: String(item?.id ?? ""),
+        requestId: String(item?.id ?? ""),
+        logicalKey: String(item?.id ?? ""),
+        storageChapterId: String(item?.id ?? ""),
         name: String(item?.name ?? ""),
         order: toNum(item?.order, 0),
-        extension: {
+        extern: {
           sort: toNum(item?.rawOrder, toNum(item?.sort, 0)),
         },
       }));
@@ -1806,9 +1797,12 @@ async function getComicDetail(payload: ComicDetailPayload = {}) {
       return [
         {
           id: String(normalizedInfo.id),
+          requestId: String(normalizedInfo.id),
+          logicalKey: String(normalizedInfo.id),
+          storageChapterId: String(normalizedInfo.id),
           name: "第1话",
           order: 1,
-          extension: {
+          extern: {
             sort: 1,
           },
         },
@@ -1824,9 +1818,9 @@ async function getComicDetail(payload: ComicDetailPayload = {}) {
           id: String(item?.id ?? ""),
           url: buildJmCoverUrl(item),
           path: `${String(item?.id ?? "")}.jpg`,
-          extension: {},
+          extern: {},
         }),
-        extension: {
+        extern: {
           unifiedItem,
         },
       };
@@ -1840,7 +1834,7 @@ async function getComicDetail(payload: ComicDetailPayload = {}) {
     allowLike: true,
     allowCollected: true,
     allowDownload: true,
-    extension: {},
+    extern: {},
   };
 
   const scheme = {
@@ -2690,6 +2684,7 @@ async function getWeekRankingData(payload: JmWeekRankingPayload = {}) {
 }
 
 async function getChapter(payload: JmChapterPayload = {}) {
+  console.debug(payload);
   const chapterId = String(payload.chapterId ?? "").trim();
   if (!chapterId) {
     throw new Error("chapterId 不能为空");
@@ -2719,7 +2714,7 @@ async function getChapter(payload: JmChapterPayload = {}) {
     id: String(image ?? ""),
   }));
 
-  return {
+  const result = {
     source: JM_PLUGIN_ID,
     comicId: String(payload.comicId ?? ""),
     chapterId,
@@ -2731,26 +2726,39 @@ async function getChapter(payload: JmChapterPayload = {}) {
     },
     data: {
       chapter: {
-        epId: String(response.id ?? chapterId),
-        epName: String(response.name ?? ""),
-        length: docs.length,
-        epPages: String(docs.length),
-        docs,
-        series: normalizeJmSeries(response.series as any[]),
+        id: String(response.id ?? chapterId),
+        requestId: String(response.id ?? chapterId),
+        logicalKey: String(response.id ?? chapterId),
+        storageChapterId: String(response.id ?? chapterId),
+        name: String(response.name ?? ""),
+        order: 0,
+        pages: docs.map((doc) => ({
+          ...doc,
+          extern: {},
+        })),
+        extern: {},
       },
     },
     chapter: {
-      epId: String(response.id ?? chapterId),
-      epName: String(response.name ?? ""),
-      length: docs.length,
-      epPages: String(docs.length),
-      docs,
-      series: normalizeJmSeries(response.series as any[]),
+      id: String(response.id ?? chapterId),
+      requestId: String(response.id ?? chapterId),
+      logicalKey: String(response.id ?? chapterId),
+      storageChapterId: String(response.id ?? chapterId),
+      name: String(response.name ?? ""),
+      order: 0,
+      pages: docs.map((doc) => ({
+        ...doc,
+        extern: {},
+      })),
+      extern: {},
     },
   };
+  console.debug(result);
+  return result;
 }
 
 async function getReadSnapshot(payload: JmReadSnapshotPayload = {}) {
+  console.debug(payload);
   const comicId = String(payload.comicId ?? "").trim();
   if (!comicId) {
     throw new Error("comicId 不能为空");
@@ -2779,11 +2787,14 @@ async function getReadSnapshot(payload: JmReadSnapshotPayload = {}) {
       const order = toNum(ep?.order, 0);
       return {
         id,
+        requestId: String(ep?.requestId ?? id),
+        logicalKey: String(ep?.logicalKey ?? id),
+        storageChapterId: String(ep?.storageChapterId ?? id),
         name: String(ep?.name ?? ""),
         order,
         extern: {
-          sort: toNum(ep?.extension?.sort, order),
-          ...toStringMap(ep?.extension),
+          sort: toNum(ep?.extern?.sort, order),
+          ...toStringMap(ep?.extern),
         },
       };
     },
@@ -2816,29 +2827,36 @@ async function getReadSnapshot(payload: JmReadSnapshotPayload = {}) {
     (chapterBundle as any)?.data?.chapter ??
     (chapterBundle as any)?.chapter ??
     {};
-  const pages = (Array.isArray(chapterData?.docs) ? chapterData.docs : []).map(
-    (doc: any) => ({
-      id: String(doc?.id ?? ""),
-      name: String(doc?.name ?? doc?.originalName ?? ""),
-      path: String(doc?.path ?? ""),
-      url: String(doc?.url ?? doc?.fileServer ?? ""),
-      extern: {},
-    }),
-  );
+  const pages = (
+    Array.isArray(chapterData?.pages) ? chapterData.pages : []
+  ).map((doc: any) => ({
+    id: String(doc?.id ?? ""),
+    name: String(doc?.name ?? doc?.originalName ?? ""),
+    path: String(doc?.path ?? ""),
+    url: String(doc?.url ?? doc?.fileServer ?? ""),
+    extern: toStringMap(doc?.extern),
+  }));
 
   const currentChapter = chapterRefs.find(
     (item: any) => String(item.id) === String(chapterId),
   ) ??
     chapterRefs.find((item: any) => toNum(item?.order, 0) === order) ?? {
-      id: String(chapterData?.epId ?? chapterId),
-      name: String(chapterData?.epName ?? ""),
+      id: String(chapterData?.id ?? chapterId),
+      requestId: String(chapterData?.requestId ?? chapterData?.id ?? chapterId),
+      logicalKey: String(
+        chapterData?.logicalKey ?? chapterData?.id ?? chapterId,
+      ),
+      storageChapterId: String(
+        chapterData?.storageChapterId ?? chapterData?.id ?? chapterId,
+      ),
+      name: String(chapterData?.name ?? ""),
       order: order > 0 ? order : 1,
       extern: {},
     };
 
   const comicInfo = normal?.comicInfo ?? {};
 
-  return {
+  const result = {
     source: JM_PLUGIN_ID,
     extern: payload.extern ?? null,
     data: {
@@ -2849,15 +2867,15 @@ async function getReadSnapshot(payload: JmReadSnapshotPayload = {}) {
         description: String(comicInfo?.description ?? ""),
         cover: {
           ...(comicInfo?.cover ?? {}),
-          extern: toStringMap(comicInfo?.cover?.extension),
+          extern: toStringMap(comicInfo?.cover?.extern),
         },
         creator: {
           ...(comicInfo?.creator ?? {}),
           avatar: {
             ...(comicInfo?.creator?.avatar ?? {}),
-            extern: toStringMap(comicInfo?.creator?.avatar?.extension),
+            extern: toStringMap(comicInfo?.creator?.avatar?.extern),
           },
-          extern: toStringMap(comicInfo?.creator?.extension),
+          extern: toStringMap(comicInfo?.creator?.extern),
         },
         titleMeta: (Array.isArray(comicInfo?.titleMeta)
           ? comicInfo.titleMeta
@@ -2865,7 +2883,7 @@ async function getReadSnapshot(payload: JmReadSnapshotPayload = {}) {
         ).map((item: any) => ({
           name: String(item?.name ?? ""),
           onTap: toStringMap(item?.onTap),
-          extern: toStringMap(item?.extension),
+          extern: toStringMap(item?.extern),
         })),
         metadata: (Array.isArray(comicInfo?.metadata)
           ? comicInfo.metadata
@@ -2877,22 +2895,39 @@ async function getReadSnapshot(payload: JmReadSnapshotPayload = {}) {
             (item: any) => ({
               name: String(item?.name ?? ""),
               onTap: toStringMap(item?.onTap),
-              extern: toStringMap(item?.extension),
+              extern: toStringMap(item?.extern),
             }),
           ),
         })),
-        extern: toStringMap(comicInfo?.extension),
+        extern: toStringMap(comicInfo?.extern),
       },
       chapter: {
-        id: String(chapterData?.epId ?? currentChapter.id),
-        name: String(chapterData?.epName ?? currentChapter.name),
+        id: String(chapterData?.id ?? currentChapter.id),
+        requestId: String(
+          chapterData?.requestId ??
+            currentChapter.requestId ??
+            currentChapter.id,
+        ),
+        logicalKey: String(
+          chapterData?.logicalKey ??
+            currentChapter.logicalKey ??
+            currentChapter.id,
+        ),
+        storageChapterId: String(
+          chapterData?.storageChapterId ??
+            currentChapter.storageChapterId ??
+            currentChapter.id,
+        ),
+        name: String(chapterData?.name ?? currentChapter.name),
         order: toNum(currentChapter.order, 0),
         pages,
-        extern: {},
+        extern: toStringMap(chapterData?.extern),
       },
       chapters: chapterRefs,
     },
   };
+  console.debug(result.data.chapter);
+  return result;
 }
 
 async function testUrlSpeed(url: string) {
@@ -2937,13 +2972,10 @@ export default {
   getComicListSceneBundle,
   getInfo,
   getFunctionPage,
-  get_function_page,
   getCloudFavoriteFilterBundle,
   getCloudFavoriteSceneBundle,
-  get_cloud_favorite_scene_bundle,
   getRankingFilterBundle,
   getAdvancedSearchScheme,
-  get_advanced_search_scheme,
   getWeekRankingFilterBundle,
   getTimeRankingFilterBundle,
   clearPluginSession,
