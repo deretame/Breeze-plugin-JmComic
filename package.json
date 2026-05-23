@@ -1,12 +1,14 @@
 {
-  "name": "jm-comic",
-  "private": true,
-  "version": "0.1.0",
+  "name": "breeze-plugin-jm-comic",
+  "version": "0.0.7",
   "type": "module",
   "packageManager": "pnpm@10.27.0",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "pnpm typecheck && node --import tsx build/generate-manifest.ts && cross-env NODE_OPTIONS=\"--import tsx\" rspack build && node --import tsx build/generate-brotli.ts",
+    "build": "pnpm typecheck && node --import tsx build/generate-version.ts && node --import tsx build/generate-manifest.ts && cross-env NODE_OPTIONS=\"--import tsx\" rspack build && node --import tsx build/generate-brotli.ts",
     "dev": "pnpm dev:serve",
     "dev:serve": "tsx dev-server.ts"
   },
