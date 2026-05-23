@@ -12,7 +12,7 @@ export function buildPluginInfo(input: BuildPluginInfoInput) {
     name: "禁漫天堂",
     uuid: JM_PLUGIN_ID,
     iconUrl:
-      "https://raw.githubusercontent.com/deretame/Breeze-plugin-JmComic/main/assets/fO.png",
+      "https://raw.githubusercontent.com/deretame/Breeze-plugin-JmComic/main/assets/fO.webp",
     creator: {
       name: "",
       describe: "",
@@ -22,6 +22,7 @@ export function buildPluginInfo(input: BuildPluginInfoInput) {
     home: "https://github.com/deretame/Breeze-plugin-JmComic",
     updateUrl:
       "https://api.github.com/repos/deretame/Breeze-plugin-JmComic/releases/latest",
+    npmName: "breeze-plugin-jm-comic",
     function: [
       {
         id: "recommend",

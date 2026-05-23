@@ -1,7 +1,7 @@
 {
   "name": "禁漫天堂",
   "uuid": "bf99008d-010b-4f17-ac7c-61a9b57dc3d9",
-  "iconUrl": "https://raw.githubusercontent.com/deretame/Breeze-plugin-JmComic/main/assets/fO.png",
+  "iconUrl": "https://raw.githubusercontent.com/deretame/Breeze-plugin-JmComic/main/assets/fO.webp",
   "creator": {
     "name": "",
     "describe": ""
@@ -10,6 +10,7 @@
   "version": "0.0.7",
   "home": "https://github.com/deretame/Breeze-plugin-JmComic",
   "updateUrl": "https://api.github.com/repos/deretame/Breeze-plugin-JmComic/releases/latest",
+  "npmName": "breeze-plugin-jm-comic",
   "function": [
     {
       "id": "recommend",
