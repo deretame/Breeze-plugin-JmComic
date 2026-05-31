@@ -4,14 +4,12 @@ import type {
   FsApi,
   NativeApi,
   PathApi,
-  WasiApi,
 } from "../types/runtime-globals";
 
 export interface RuntimeApiSet {
   fs: FsApi;
   FSError: new (message?: string, code?: string, path?: string) => Error;
   native: NativeApi;
-  wasi: WasiApi;
   bridge: BridgeApi;
   path: PathApi;
   nodeCryptoCompat: CryptoApi;
@@ -36,22 +34,16 @@ function isCryptoApi(value: unknown): value is CryptoApi {
   );
 }
 
-function readGlobal<K extends RuntimeApiName>(
-  name: K,
-): RuntimeApiSet[K] | undefined {
+function readGlobal<K extends RuntimeApiName>(name: K): RuntimeApiSet[K] | undefined {
   const g = globalThis as RuntimeGlobal;
   return g[name] as RuntimeApiSet[K] | undefined;
 }
 
-export function getApi<K extends RuntimeApiName>(
-  name: K,
-): RuntimeApiSet[K] | undefined {
+export function getApi<K extends RuntimeApiName>(name: K): RuntimeApiSet[K] | undefined {
   return readGlobal(name);
 }
 
-export function requireApi<K extends RuntimeApiName>(
-  name: K,
-): RuntimeApiSet[K] {
+export function requireApi<K extends RuntimeApiName>(name: K): RuntimeApiSet[K] {
   const value = readGlobal(name);
   if (value === undefined || value === null) {
     throw new TypeError(`runtime API 不可用: ${String(name)}`);
@@ -85,9 +77,6 @@ export const runtime = {
   },
   get native() {
     return requireApi("native");
-  },
-  get wasi() {
-    return requireApi("wasi");
   },
   get bridge() {
     return requireApi("bridge");

@@ -15,6 +15,24 @@ import {
 import { flutterTools, opencc, pluginConfig } from "./tools";
 import type { RequestPayload } from "./types";
 import { md5Hex } from "./utils";
+import type {
+  AdvancedSearchContract,
+  CapabilitiesBundleContract,
+  ChapterContentContract,
+  ComicDetailContract,
+  ComicListSceneBundleContract,
+  CommentFeedContract,
+  FilterBundleContract,
+  FunctionPageContract,
+  InfoContract,
+  ListFavoriteFoldersResult,
+  ReadSnapshotContract,
+  SearchResultContract,
+  SettingsBundleContract,
+  ToggleFavoriteResult,
+  ToggleLikeResult,
+  UserInfoBundleContract,
+} from "../types/type";
 
 const JM_PLUGIN_ID = "bf99008d-010b-4f17-ac7c-61a9b57dc3d9";
 
@@ -782,7 +800,7 @@ async function saveBlockedCategories(values: string[]) {
   await pluginConfig.save("search.blockedCategories", JSON.stringify(values));
 }
 
-async function getSettingsBundle() {
+async function getSettingsBundle(): Promise<SettingsBundleContract> {
   const [account, password] = await Promise.all([
     loadPluginSetting("auth.account", ""),
     loadPluginSetting("auth.password", ""),
@@ -814,7 +832,7 @@ async function getSettingsBundle() {
   };
 }
 
-async function getUserInfoBundle() {
+async function getUserInfoBundle(): Promise<UserInfoBundleContract> {
   const ensureUserInfo = async () => {
     const stored = await loadPluginSetting("auth.userInfo", {});
     const current =
@@ -1267,12 +1285,12 @@ async function init() {
   };
 }
 
-async function getCapabilitiesBundle() {
+async function getCapabilitiesBundle(): Promise<CapabilitiesBundleContract> {
   return {
     source: JM_PLUGIN_ID,
     scheme: {
       version: "1.0.0",
-      type: "advancedActions",
+      type: "capabilities" as const,
       actions: [
         {
           key: "clear_session",
@@ -1337,7 +1355,7 @@ function buildJmCloudFavoriteScene() {
 
 async function getCloudFavoriteFilterBundle(
   payload: JmCloudFavoritePayload = {},
-) {
+): Promise<FilterBundleContract> {
   const extern = toStringMap(payload.extern);
   const path = `${Config.baseUrl}/favorite`;
   const raw = (await jmRequest({
@@ -1366,8 +1384,8 @@ async function getCloudFavoriteFilterBundle(
   return {
     source: JM_PLUGIN_ID,
     scheme: {
-      version: "1.0.0",
-      type: "rankingFilter",
+      version: "1.0.0" as const,
+      type: "rankingFilter" as const,
       title: "云端收藏筛选",
       fields: [
         {
@@ -1400,13 +1418,11 @@ async function getCloudFavoriteFilterBundle(
         folderId: String(extern.folderId ?? ""),
         order: String(extern.order ?? "mr"),
       },
-      folderList,
-      raw,
     },
   };
 }
 
-async function getCloudFavoriteSceneBundle() {
+async function getCloudFavoriteSceneBundle(): Promise<ComicListSceneBundleContract> {
   return {
     source: JM_PLUGIN_ID,
     scheme: {
@@ -1414,19 +1430,21 @@ async function getCloudFavoriteSceneBundle() {
       type: "comicListSceneBundle",
     },
     data: {
-      scene: buildJmCloudFavoriteScene(),
+      scene: buildJmCloudFavoriteScene() as any,
     },
   };
 }
 
-async function getInfo() {
+async function getInfo(): Promise<InfoContract> {
   return buildPluginInfo({
     buildLatestScene: buildJmLatestScene,
     buildRankingScene: buildJmRankingScene,
-  });
+  }) as InfoContract;
 }
 
-async function getFunctionPage(payload: Record<string, unknown> = {}) {
+async function getFunctionPage(
+  payload: Record<string, unknown> = {},
+): Promise<FunctionPageContract> {
   const id = String(payload.id ?? toStringMap(payload.core).id ?? "").trim();
   if (id !== "recommend") {
     throw new Error(`未知功能: ${id}`);
@@ -1474,9 +1492,8 @@ async function getFunctionPage(payload: Record<string, unknown> = {}) {
       type: "page",
       title: "推荐",
       body: {
-        type: "list",
-        direction: "vertical",
-        children: [{ type: "comic-section-list", key: "sections" }],
+        type: "list" as const,
+        children: [{ type: "comic-section-list" as const, key: "sections" }],
       },
     },
     data: {
@@ -1486,7 +1503,7 @@ async function getFunctionPage(payload: Record<string, unknown> = {}) {
   };
 }
 
-async function getComicListSceneBundle() {
+async function getComicListSceneBundle(): Promise<ComicListSceneBundleContract> {
   return {
     source: JM_PLUGIN_ID,
     scheme: {
@@ -1504,12 +1521,12 @@ async function getComicListSceneBundle() {
           fnPath: "getRankingFilterBundle",
           extern: { source: "ranking" },
         },
-      }),
+      }) as any,
     },
   };
 }
 
-async function getRankingFilterBundle() {
+async function getRankingFilterBundle(): Promise<FilterBundleContract> {
   return {
     source: JM_PLUGIN_ID,
     scheme: {
@@ -1542,7 +1559,7 @@ async function getRankingFilterBundle() {
 
 async function getAdvancedSearchScheme(
   payload: { extern?: Record<string, unknown> } = {},
-) {
+): Promise<AdvancedSearchContract> {
   const extern = toStringMap(payload.extern);
   return {
     source: JM_PLUGIN_ID,
@@ -1571,7 +1588,7 @@ async function getAdvancedSearchScheme(
   };
 }
 
-async function getWeekRankingFilterBundle() {
+async function getWeekRankingFilterBundle(): Promise<FilterBundleContract> {
   return {
     source: JM_PLUGIN_ID,
     scheme: {
@@ -1602,7 +1619,9 @@ async function getWeekRankingFilterBundle() {
   };
 }
 
-async function getTimeRankingFilterBundle(payload: { tag?: string } = {}) {
+async function getTimeRankingFilterBundle(
+  payload: { tag?: string } = {},
+): Promise<FilterBundleContract> {
   const tag = String(payload.tag ?? "").trim();
   const categoryOptions = getTimeRankingCategoryOptions(tag);
   return {
@@ -1667,7 +1686,9 @@ function timestampToIso(value: unknown): string {
   return new Date(seconds * 1000).toISOString();
 }
 
-async function getComicDetail(payload: ComicDetailPayload = {}) {
+async function getComicDetail(
+  payload: ComicDetailPayload = {},
+): Promise<ComicDetailContract> {
   const comicId = String(payload.comicId ?? "").trim();
   if (!comicId) {
     throw new Error("comicId 不能为空");
@@ -1775,7 +1796,7 @@ async function getComicDetail(payload: ComicDetailPayload = {}) {
               openSearchAction({ source: JM_PLUGIN_ID, keyword: item }),
             ),
         ),
-      ].filter(Boolean),
+      ].filter((item): item is NonNullable<typeof item> => item != null),
       extern: {},
     },
     eps: (() => {
@@ -1839,8 +1860,8 @@ async function getComicDetail(payload: ComicDetailPayload = {}) {
   };
 
   const scheme = {
-    version: "1.0.0",
-    type: "comicDetail",
+    version: "1.0.0" as const,
+    type: "comicDetail" as const,
     source: JM_PLUGIN_ID,
   };
 
@@ -1915,9 +1936,8 @@ async function searchComic(payload: JmSearchPayload = {}) {
           useJwt: payload.useJwt,
           jwtToken: payload.jwtToken,
         });
-        const comicInfo = detailResponse?.data?.raw?.comicInfo as
-          | Record<string, any>
-          | undefined;
+        const comicInfo = (detailResponse?.data?.raw as Record<string, any>)
+          ?.comicInfo as Record<string, any> | undefined;
         if (comicInfo?.id) {
           return buildResult(
             [
@@ -2331,7 +2351,9 @@ async function getCloudFavoriteData(payload: JmCloudFavoritePayload = {}) {
   };
 }
 
-async function toggleLike(payload: JmLikePayload = {}) {
+async function toggleLike(
+  payload: JmLikePayload = {},
+): Promise<ToggleLikeResult> {
   const comicId = String(payload.comicId ?? "").trim();
   if (!comicId) {
     throw new Error("comicId 不能为空");
@@ -2345,7 +2367,6 @@ async function toggleLike(payload: JmLikePayload = {}) {
     });
     return {
       liked: true,
-      message: "JM 暂不支持取消点赞",
     };
   }
 
@@ -2364,7 +2385,9 @@ async function toggleLike(payload: JmLikePayload = {}) {
   };
 }
 
-async function toggleFavorite(payload: JmToggleFavoritePayload = {}) {
+async function toggleFavorite(
+  payload: JmToggleFavoritePayload = {},
+): Promise<ToggleFavoriteResult> {
   const comicId = String(payload.comicId ?? "").trim();
   if (!comicId) {
     throw new Error("comicId 不能为空");
@@ -2394,7 +2417,9 @@ async function toggleFavorite(payload: JmToggleFavoritePayload = {}) {
   };
 }
 
-async function listFavoriteFolders(payload: JmFavoriteFolderPayload = {}) {
+async function listFavoriteFolders(
+  payload: JmFavoriteFolderPayload = {},
+): Promise<ListFavoriteFoldersResult> {
   const path = `${Config.baseUrl}/favorite`;
   const raw = (await jmRequest({
     path,
@@ -2502,7 +2527,9 @@ function mapJmCommentItem(item: any) {
   };
 }
 
-async function getCommentFeed(payload: JmCommentFeedPayload = {}) {
+async function getCommentFeed(
+  payload: JmCommentFeedPayload = {},
+): Promise<CommentFeedContract> {
   const comicId = String(payload.comicId ?? "").trim();
   const page = Math.max(1, toNum(payload.page, 1));
   if (!comicId) {
@@ -2538,7 +2565,6 @@ async function getCommentFeed(payload: JmCommentFeedPayload = {}) {
         reply: false,
       },
       paging: {
-        page,
         hasReachedMax,
       },
       topItems: [],

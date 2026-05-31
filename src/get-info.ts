@@ -18,7 +18,7 @@ export function buildPluginInfo(input: BuildPluginInfoInput) {
       describe: "",
     },
     describe: "禁漫天堂插件",
-    version: "0.0.7",
+    version: "0.0.8",
     home: "https://github.com/deretame/Breeze-plugin-JmComic",
     updateUrl:
       "https://api.github.com/repos/deretame/Breeze-plugin-JmComic/releases/latest",
@@ -28,11 +28,11 @@ export function buildPluginInfo(input: BuildPluginInfoInput) {
         id: "recommend",
         title: "推荐",
         action: {
-          type: "openPluginFunction",
+          type: "openPluginFunction" as const,
           payload: {
             id: "recommend",
             title: "推荐",
-            presentation: "page",
+            presentation: "page" as const,
           },
         },
       },
@@ -40,7 +40,7 @@ export function buildPluginInfo(input: BuildPluginInfoInput) {
         id: "latest",
         title: "最新",
         action: {
-          type: "openComicList",
+          type: "openComicList" as const,
           payload: { scene: input.buildLatestScene() },
         },
       },
@@ -48,7 +48,7 @@ export function buildPluginInfo(input: BuildPluginInfoInput) {
         id: "ranking",
         title: "排行榜",
         action: {
-          type: "openComicList",
+          type: "openComicList" as const,
           payload: { scene: input.buildRankingScene() },
         },
       },
@@ -56,7 +56,7 @@ export function buildPluginInfo(input: BuildPluginInfoInput) {
         id: "cloudFavorite",
         title: "云端收藏",
         action: {
-          type: "openCloudFavorite",
+          type: "openCloudFavorite" as const,
           payload: { title: "云端收藏" },
         },
       },
