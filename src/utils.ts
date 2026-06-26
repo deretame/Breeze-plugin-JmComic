@@ -1,4 +1,4 @@
-import { hostCrypto } from "./host-bridge";
+import { hostRuntime } from "../types/runtime-api";
 
 export function nowTs(): string {
   return String(Date.now());
@@ -14,7 +14,7 @@ export function randomDeviceId(): string {
 }
 
 export async function md5Hex(text: string): Promise<string> {
-  return hostCrypto.md5Hex(text);
+  return hostRuntime.md5Hex(text);
 }
 
 export function getHost(url: string): string {

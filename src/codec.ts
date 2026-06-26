@@ -1,6 +1,5 @@
-import { runtime } from "../types/runtime-api";
+import { hostRuntime } from "../types/runtime-api";
 import { Config } from "./constants";
-import { hostAesEcbPkcs7DecryptB64 } from "./host-bridge";
 import { md5Hex } from "./utils";
 
 const BASE64_BODY_RE = /^[A-Za-z0-9+/]*$/;
@@ -16,7 +15,7 @@ function tryParseJson(raw: string): unknown | null {
 async function maybeGunzipBytes(bytes: Uint8Array): Promise<Uint8Array> {
   if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
     try {
-      return await runtime.bridge.gzipDecompress(bytes);
+      return await hostRuntime.bridge.gzipDecompress(bytes);
     } catch {
       return bytes;
     }
@@ -70,7 +69,7 @@ async function decryptDataField(
   for (const seed of Config.JM_SETTING_AES_SEEDS) {
     try {
       const key = await md5Hex(`${tsRaw}${seed}`);
-      const text = await hostAesEcbPkcs7DecryptB64(payload, key);
+      const text = await hostRuntime.aesEcbPkcs7DecryptB64(payload, key);
       if (!text.trim()) {
         continue;
       }
