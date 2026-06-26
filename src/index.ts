@@ -1,11 +1,25 @@
 import axios from "axios";
-import { runtime } from "../types/runtime-api";
+import { hostRuntime } from "../types/runtime-api";
+import type {
+  AdvancedSearchContract,
+  CapabilitiesBundleContract,
+  ComicDetailContract,
+  ComicListSceneBundleContract,
+  CommentFeedContract,
+  FilterBundleContract,
+  FunctionPageContract,
+  InfoContract,
+  ListFavoriteFoldersResult,
+  SettingsBundleContract,
+  ToggleFavoriteResult,
+  ToggleLikeResult,
+  UserInfoBundleContract,
+} from "../types/type";
 import { createJmClient, setUnauthorizedSchemeProvider } from "./client";
 import { decodeResponsePayload } from "./codec";
 import { Config } from "./constants";
 import { toFriendlyError } from "./errors";
 import { buildPluginInfo } from "./get-info";
-import { hostAesEcbPkcs7DecryptB64 } from "./host-bridge";
 import { buildRequestConfig } from "./request-config";
 import {
   getCachedResponse,
@@ -15,24 +29,6 @@ import {
 import { flutterTools, opencc, pluginConfig } from "./tools";
 import type { RequestPayload } from "./types";
 import { md5Hex } from "./utils";
-import type {
-  AdvancedSearchContract,
-  CapabilitiesBundleContract,
-  ChapterContentContract,
-  ComicDetailContract,
-  ComicListSceneBundleContract,
-  CommentFeedContract,
-  FilterBundleContract,
-  FunctionPageContract,
-  InfoContract,
-  ListFavoriteFoldersResult,
-  ReadSnapshotContract,
-  SearchResultContract,
-  SettingsBundleContract,
-  ToggleFavoriteResult,
-  ToggleLikeResult,
-  UserInfoBundleContract,
-} from "../types/type";
 
 const JM_PLUGIN_ID = "bf99008d-010b-4f17-ac7c-61a9b57dc3d9";
 
@@ -50,7 +46,7 @@ async function fetchImageBytes({ url = "", timeoutMs = 30000 } = {}) {
     responseType: "arraybuffer",
   });
 
-  const nativeBufferId = await runtime.native.put(
+  const nativeBufferId = await hostRuntime.native.put(
     new Uint8Array(response.data),
   );
 
@@ -1026,7 +1022,7 @@ async function loadHostPool(): Promise<string[]> {
   const raw = await fetchTextFromAny(Config.JM_HOST_CONFIG_URLS);
   const normalized = raw.replace(/[^A-Za-z0-9+/=]/g, "");
   const key = await md5Hex(Config.JM_HOSTCFG_AES_SEED);
-  const plain = await hostAesEcbPkcs7DecryptB64(normalized, key);
+  const plain = await hostRuntime.aesEcbPkcs7DecryptB64(normalized, key);
   const parsed = JSON.parse(String(plain || "{}")) as { Server?: unknown };
   if (!Array.isArray(parsed.Server)) return [];
   return parsed.Server.map((item) => String(item || "").trim()).filter(Boolean);
@@ -1144,7 +1140,7 @@ async function resolveFastestBases() {
       hostPool: baseCandidates,
     });
   } catch (error) {
-    console.warn("[jm.init] cache runtime endpoints failed", error);
+    console.warn("[jm.init] cache hostRuntime endpoints failed", error);
   }
 
   return { data };
