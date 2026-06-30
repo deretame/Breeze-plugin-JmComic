@@ -8,7 +8,6 @@ import {
   getCachedResponse,
   getJwtToken,
   getUserAgent,
-  setCachedResponse,
   setJwtToken,
 } from "./state";
 import type { JmMeta, JmRequestConfig } from "./types";
@@ -132,21 +131,21 @@ export function createJmClient() {
       }
     }
 
-    if (
-      !meta?.fromCache &&
-      meta?.cacheEnabled &&
-      String(cfg.method || "GET").toUpperCase() === "GET"
-    ) {
-      await setCachedResponse(
-        {
-          method: String(cfg.method || "GET").toUpperCase(),
-          url: String(cfg.url || ""),
-          params: cfg.params as Record<string, unknown> | undefined,
-          data: cfg.data,
-        },
-        decoded,
-      );
-    }
+    // if (
+    //   !meta?.fromCache &&
+    //   meta?.cacheEnabled &&
+    //   String(cfg.method || "GET").toUpperCase() === "GET"
+    // ) {
+    //   await setCachedResponse(
+    //     {
+    //       method: String(cfg.method || "GET").toUpperCase(),
+    //       url: String(cfg.url || ""),
+    //       params: cfg.params as Record<string, unknown> | undefined,
+    //       data: cfg.data,
+    //     },
+    //     decoded,
+    //   );
+    // }
 
     response.data = decoded;
     return response;
