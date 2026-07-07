@@ -1,20 +1,28 @@
 import axios from "axios";
-import { hostRuntime } from "../types/runtime-api";
 import type {
   AdvancedSearchContract,
   CapabilitiesBundleContract,
   ComicDetailContract,
+  ComicDetailData,
+  ComicDetailNormal,
   ComicListSceneBundleContract,
   CommentFeedContract,
   FilterBundleContract,
   FunctionPageContract,
   InfoContract,
   ListFavoriteFoldersResult,
+  RecommendItem,
   SettingsBundleContract,
   ToggleFavoriteResult,
   ToggleLikeResult,
   UserInfoBundleContract,
-} from "../types/type";
+} from "breeze-plugin-kit";
+import {
+  flutterTools,
+  hostRuntime,
+  opencc,
+  pluginConfig,
+} from "breeze-plugin-kit";
 import { createJmClient, setUnauthorizedSchemeProvider } from "./client";
 import { decodeResponsePayload } from "./codec";
 import { Config } from "./constants";
@@ -26,7 +34,6 @@ import {
   getRuntimeEndpointCache,
   setRuntimeEndpointCache,
 } from "./state";
-import { flutterTools, opencc, pluginConfig } from "./tools";
 import type { RequestPayload } from "./types";
 import { md5Hex } from "./utils";
 
@@ -46,9 +53,7 @@ async function fetchImageBytes({ url = "", timeoutMs = 30000 } = {}) {
     responseType: "arraybuffer",
   });
 
-  const nativeBufferId = await hostRuntime.native.put(
-    new Uint8Array(response.data),
-  );
+  const nativeBufferId = await native.put(new Uint8Array(response.data));
 
   return { nativeBufferId: Number(nativeBufferId) };
 }
@@ -1725,7 +1730,7 @@ async function getComicDetail(
     series,
   };
 
-  const normal = {
+  const normal: ComicDetailNormal = {
     comicInfo: {
       id: String(normalizedInfo.id),
       title: normalizedInfo.name,
@@ -1826,23 +1831,32 @@ async function getComicDetail(
         },
       ];
     })(),
-    recommend: (normalizedInfo.related_list as any[]).map((item: any) => {
-      const unifiedItem = toComicItem(item);
-      return {
-        source: JM_PLUGIN_ID,
-        id: String(item?.id ?? ""),
-        title: String(item?.name ?? ""),
-        cover: createImage({
-          id: String(item?.id ?? ""),
-          url: buildJmCoverUrl(item),
-          path: `${String(item?.id ?? "")}.jpg`,
-          extern: {},
-        }),
-        extern: {
-          unifiedItem,
-        },
-      };
-    }),
+    recommend: (normalizedInfo.related_list as any[]).map(
+      (item: any): RecommendItem => {
+        const unifiedItem = toComicItem(item);
+        return {
+          source: JM_PLUGIN_ID,
+          id: unifiedItem.id,
+          title: unifiedItem.title,
+          subtitle: unifiedItem.subtitle,
+          finished: unifiedItem.finished,
+          likesCount: unifiedItem.likesCount,
+          viewsCount: unifiedItem.viewsCount,
+          updatedAt: unifiedItem.updatedAt,
+          cover: createImage({
+            id: unifiedItem.id,
+            url: buildJmCoverUrl(item),
+            path: `${unifiedItem.id}.jpg`,
+            extern: {},
+          }),
+          metadata: [],
+          raw: unifiedItem.raw,
+          extern: {
+            unifiedItem,
+          },
+        };
+      },
+    ),
     totalViews: toNum(normalizedInfo.total_views),
     totalLikes: toNum(normalizedInfo.likes),
     totalComments: toNum(normalizedInfo.comment_total),
@@ -1861,7 +1875,7 @@ async function getComicDetail(
     source: JM_PLUGIN_ID,
   };
 
-  const data = {
+  const data: ComicDetailData = {
     normal,
     raw: {
       comicInfo: normalizedInfo,

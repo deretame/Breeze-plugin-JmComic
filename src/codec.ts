@@ -1,4 +1,4 @@
-import { hostRuntime } from "../types/runtime-api";
+import { hostRuntime } from "breeze-plugin-kit";
 import { Config } from "./constants";
 import { md5Hex } from "./utils";
 
@@ -15,7 +15,7 @@ function tryParseJson(raw: string): unknown | null {
 async function maybeGunzipBytes(bytes: Uint8Array): Promise<Uint8Array> {
   if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
     try {
-      return await hostRuntime.bridge.gzipDecompress(bytes);
+      return await bridge.gzipDecompress(bytes);
     } catch {
       return bytes;
     }

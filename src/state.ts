@@ -1,5 +1,5 @@
 import { Config } from "./constants";
-import { cache } from "./tools";
+import { cache } from "breeze-plugin-kit";
 import type { CacheKeyConfig } from "./types";
 import { randomDeviceId } from "./utils";
 
