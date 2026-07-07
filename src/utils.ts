@@ -1,4 +1,4 @@
-import { hostRuntime } from "../types/runtime-api";
+import { hostRuntime } from "breeze-plugin-kit";
 
 export function nowTs(): string {
   return String(Date.now());
