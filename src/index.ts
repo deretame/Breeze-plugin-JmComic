@@ -1740,6 +1740,7 @@ async function getComicDetail(
         createActionItem(
           `章节数：${normalizedInfo.series.length > 0 ? normalizedInfo.series.length : 1}`,
         ),
+        createActionItem(`总页数：${toNum(response.total_photos)}`),
         createActionItem(`禁漫车：jm${normalizedInfo.id}`),
       ],
       creator: {
