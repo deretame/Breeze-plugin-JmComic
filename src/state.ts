@@ -1,5 +1,5 @@
-import { Config } from "./constants";
 import { cache } from "breeze-plugin-kit";
+import { Config } from "./constants";
 import type { CacheKeyConfig } from "./types";
 import { randomDeviceId } from "./utils";
 
@@ -7,12 +7,15 @@ let fallbackDeviceId = "";
 let fallbackJwt = "";
 let fallbackUa = "";
 
-type RuntimeEndpointCache = {
+export type RuntimeEndpointCache = {
   apiBaseUrl: string;
   imageBaseUrl: string;
+  /** 测速排序后的图床池, 首选第一条. 旧缓存缺该字段时回退 [imageBaseUrl]. */
+  imagePool: string[];
   hostPool: string[];
   updatedAt: number;
 };
+const ENDPOINT_CACHE_TTL_MS = 30 * 60 * 1000;
 
 async function cacheSet(key: string, value: unknown) {
   await cache.set(key, value);
@@ -156,7 +159,7 @@ export async function setCachedResponse(
 }
 
 export async function getRuntimeEndpointCache(
-  ttlMs = 30 * 60 * 1000,
+  ttlMs = ENDPOINT_CACHE_TTL_MS,
 ): Promise<RuntimeEndpointCache | null> {
   const raw = (await cache.get(
     scopedKey("runtime:endpoints"),
@@ -166,6 +169,9 @@ export async function getRuntimeEndpointCache(
 
   const apiBaseUrl = String(raw.apiBaseUrl || "").trim();
   const imageBaseUrl = String(raw.imageBaseUrl || "").trim();
+  const imagePool = Array.isArray(raw.imagePool)
+    ? raw.imagePool.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
   const hostPool = Array.isArray(raw.hostPool)
     ? raw.hostPool.map((item) => String(item || "").trim()).filter(Boolean)
     : [];
@@ -174,20 +180,126 @@ export async function getRuntimeEndpointCache(
   if (!apiBaseUrl || !imageBaseUrl || !Number.isFinite(updatedAt)) return null;
   if (Date.now() - updatedAt > ttlMs) return null;
 
-  return { apiBaseUrl, imageBaseUrl, hostPool, updatedAt };
+  return {
+    apiBaseUrl,
+    imageBaseUrl,
+    imagePool: imagePool.length > 0 ? imagePool : [imageBaseUrl],
+    hostPool,
+    updatedAt,
+  };
+}
+
+/**
+ * 端点唯一真相源: 读缓存快照, 空缓存回退默认值.
+ * 调用方禁止在模块变量里另存一份 endpoint, 全部经由这里.
+ */
+export async function getEndpoints(): Promise<{
+  apiBaseUrl: string;
+  imageBaseUrl: string;
+  imagePool: string[];
+  hostPool: string[];
+}> {
+  const cached = await getRuntimeEndpointCache();
+  if (cached) {
+    return {
+      apiBaseUrl: cached.apiBaseUrl,
+      imageBaseUrl: cached.imageBaseUrl,
+      imagePool: cached.imagePool,
+      hostPool: cached.hostPool,
+    };
+  }
+  return {
+    apiBaseUrl: Config.JM_FALLBACK_API_BASE,
+    imageBaseUrl: Config.JM_FALLBACK_IMAGE_BASE,
+    imagePool: [Config.JM_FALLBACK_IMAGE_BASE],
+    hostPool: [],
+  };
+}
+
+export async function getApiBaseUrl(): Promise<string> {
+  return (await getEndpoints()).apiBaseUrl;
+}
+
+export async function getImageBaseUrl(): Promise<string> {
+  return (await getEndpoints()).imageBaseUrl;
+}
+
+export async function getImagePool(): Promise<string[]> {
+  return (await getEndpoints()).imagePool;
+}
+
+export async function getApiPool(): Promise<string[]> {
+  return (await getEndpoints()).hostPool;
 }
 
 export async function setRuntimeEndpointCache(input: {
   apiBaseUrl: string;
   imageBaseUrl: string;
+  imagePool: string[];
   hostPool: string[];
 }) {
+  const image = String(input.imageBaseUrl || "").trim() || Config.JM_FALLBACK_IMAGE_BASE;
   await cacheSet(scopedKey("runtime:endpoints"), {
     apiBaseUrl: String(input.apiBaseUrl || "").trim(),
-    imageBaseUrl: String(input.imageBaseUrl || "").trim(),
+    imageBaseUrl: image,
+    imagePool: Array.isArray(input.imagePool)
+      ? input.imagePool.map((item) => String(item || "").trim()).filter(Boolean)
+      : [],
     hostPool: Array.isArray(input.hostPool)
       ? input.hostPool.map((item) => String(item || "").trim()).filter(Boolean)
       : [],
     updatedAt: Date.now(),
   });
+}
+
+export async function clearRuntimeEndpointCache() {
+  await cacheDelete(scopedKey("runtime:endpoints"));
+}
+
+/**
+ * 剔除坏节点: 从缓存池里去掉 failedBase, 首选顺延到下一条.
+ * 返回剔除后的快照; 池里只剩一条或找不到时返回 null(调用方不 failover).
+ */
+export async function dropFailedApiBase(
+  failedBase: string,
+): Promise<RuntimeEndpointCache | null> {
+  const cached = await getRuntimeEndpointCache();
+  if (!cached || cached.hostPool.length <= 1) return null;
+  const remaining = cached.hostPool.filter((base) => base !== failedBase);
+  if (remaining.length === 0 || remaining.length === cached.hostPool.length) {
+    return null;
+  }
+  const next: RuntimeEndpointCache = {
+    apiBaseUrl: remaining[0]!,
+    imageBaseUrl: cached.imageBaseUrl,
+    imagePool: cached.imagePool,
+    hostPool: remaining,
+    updatedAt: Date.now(),
+  };
+  await cacheSet(scopedKey("runtime:endpoints"), next);
+  return next;
+}
+
+/**
+ * 剔除坏图床: 从 imagePool 去掉 failedBase, 首选顺延.
+ * 池里只剩一条或找不到时返回 null(调用方不 failover).
+ */
+export async function dropFailedImageBase(
+  failedBase: string,
+): Promise<RuntimeEndpointCache | null> {
+  const cached = await getRuntimeEndpointCache();
+  if (!cached || cached.imagePool.length <= 1) return null;
+  const remaining = cached.imagePool.filter((base) => base !== failedBase);
+  if (remaining.length === 0 || remaining.length === cached.imagePool.length) {
+    return null;
+  }
+  const next: RuntimeEndpointCache = {
+    apiBaseUrl: cached.apiBaseUrl,
+    imageBaseUrl: remaining[0]!,
+    imagePool: remaining,
+    hostPool: cached.hostPool,
+    updatedAt: Date.now(),
+  };
+  await cacheSet(scopedKey("runtime:endpoints"), next);
+  return next;
 }

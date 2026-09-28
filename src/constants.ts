@@ -15,19 +15,4 @@ export class Config {
   public static JM_FALLBACK_IMAGE_BASE =
     "https://cdn-msp3.jmdanjonproxy.vip";
 
-  public static baseUrlIndex = 0;
-
-  public static baseUrls = [Config.JM_FALLBACK_API_BASE];
-
-  public static get baseUrl(): string {
-    return this.baseUrls[this.baseUrlIndex] ?? this.baseUrls[0] ?? "";
-  }
-
-  public static imagesUrlIndex = 0;
-
-  public static imagesUrls = [Config.JM_FALLBACK_IMAGE_BASE];
-
-  public static get imagesUrl(): string {
-    return this.imagesUrls[this.imagesUrlIndex] ?? this.imagesUrls[0] ?? "";
-  }
 }

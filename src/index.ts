@@ -1,16 +1,21 @@
 import axios from "axios";
 import type {
+  ActionItem,
   AdvancedSearchContract,
   CapabilitiesBundleContract,
   ComicDetailContract,
   ComicDetailData,
   ComicDetailNormal,
+  ComicInfoPageAction,
   ComicListSceneBundleContract,
   CommentFeedContract,
   FilterBundleContract,
   FunctionPageContract,
+  ImageItem,
   InfoContract,
   ListFavoriteFoldersResult,
+  MetadataListItem,
+  OpenSearchAction,
   RecommendItem,
   SettingsBundleContract,
   ToggleFavoriteResult,
@@ -24,13 +29,32 @@ import {
   pluginConfig,
 } from "breeze-plugin-kit";
 import { createJmClient, setUnauthorizedSchemeProvider } from "./client";
-import { decodeResponsePayload } from "./codec";
 import { Config } from "./constants";
+import {
+  HOSTCFG_TIMEOUT_MS,
+  PROBE_CONCURRENCY,
+  PROBE_TIMEOUT_MS,
+  normalizeBaseUrl,
+  orderImagePool,
+  orderPool,
+  probeAll,
+  probeImageHost,
+} from "./endpoint-pool";
+import type { EndpointProbe, ImageProbe } from "./endpoint-pool";
 import { toFriendlyError } from "./errors";
 import { buildPluginInfo } from "./get-info";
+import type { BuiltRequest } from "./request-config";
 import { buildRequestConfig } from "./request-config";
 import {
+  clearRuntimeEndpointCache,
+  dropFailedApiBase,
+  dropFailedImageBase,
+  getApiBaseUrl,
+  getApiPool,
   getCachedResponse,
+  getEndpoints,
+  getImageBaseUrl,
+  getImagePool,
   getRuntimeEndpointCache,
   setRuntimeEndpointCache,
 } from "./state";
@@ -47,15 +71,32 @@ async function fetchImageBytes({ url = "", timeoutMs = 30000 } = {}) {
 
   const { host } = new URL(targetUrl);
 
-  const response = await axios.get(targetUrl, {
-    headers: { Host: host },
-    timeout: Math.max(0, timeoutMs) || 30000,
-    responseType: "arraybuffer",
-  });
-
-  const nativeBufferId = await native.put(new Uint8Array(response.data));
-
-  return { nativeBufferId: Number(nativeBufferId) };
+  try {
+    const response = await axios.get(targetUrl, {
+      headers: { Host: host },
+      timeout: Math.max(0, timeoutMs) || 30000,
+      responseType: "arraybuffer",
+    });
+    const nativeBufferId = await native.put(new Uint8Array(response.data));
+    return { nativeBufferId: Number(nativeBufferId) };
+  } catch (err) {
+    // 图床网络层失败: 在 imagePool 内切下一台重试一次
+    if (!isNetworkFailure(err)) throw err;
+    const pool = await getImagePool();
+    const failed = pool.find((base) => targetUrl.startsWith(base));
+    if (!failed || pool.length <= 1) throw err;
+    const next = await dropFailedImageBase(failed);
+    if (!next) throw err;
+    const retryUrl = targetUrl.replace(failed, next.imageBaseUrl);
+    const { host: retryHost } = new URL(retryUrl);
+    const response = await axios.get(retryUrl, {
+      headers: { Host: retryHost },
+      timeout: Math.max(0, timeoutMs) || 30000,
+      responseType: "arraybuffer",
+    });
+    const nativeBufferId = await native.put(new Uint8Array(response.data));
+    return { nativeBufferId: Number(nativeBufferId) };
+  }
 }
 
 async function jmRequest(input: RequestPayload) {
@@ -71,22 +112,68 @@ async function jmRequest(input: RequestPayload) {
     const response = await jmClient.request(config);
     return response.data;
   } catch (err) {
-    if (
-      cacheEnabled &&
-      String(config.method || "GET").toUpperCase() === "GET"
-    ) {
-      const cached = await getCachedResponse({
-        method: String(config.method || "GET").toUpperCase(),
-        url: String(config.url || ""),
-        params: config.params as Record<string, unknown> | undefined,
-        data: config.data,
-      });
-      if (cached !== null && cached !== undefined) {
-        return cached;
+    const failedUrl = String(config.url || "");
+    // 坏节点剔除走缓存池: 当前失败 base 出池, 首选顺延, 不再回头
+    if (isNetworkFailure(err)) {
+      const pool = await getApiPool();
+      const failed = pool.find((base) => failedUrl.startsWith(base));
+      if (failed && pool.length > 1) {
+        const next = await dropFailedApiBase(failed);
+        if (next) {
+          const retryConfig = {
+            ...config,
+            url: failedUrl.replace(failed, next.apiBaseUrl),
+          };
+          try {
+            const response = await jmClient.request(retryConfig);
+            return response.data;
+          } catch (retryErr) {
+            // 重试失败走统一错误处理(缓存/友好错误), 不再递归 failover
+            return handleRequestError(retryErr, retryConfig, cacheEnabled);
+          }
+        }
       }
     }
-    throw toFriendlyError(err);
+    return handleRequestError(err, config, cacheEnabled);
   }
+}
+
+async function handleRequestError(
+  err: unknown,
+  config: BuiltRequest["config"],
+  cacheEnabled: boolean,
+) {
+  if (cacheEnabled && String(config.method || "GET").toUpperCase() === "GET") {
+    const cached = await getCachedResponse({
+      method: String(config.method || "GET").toUpperCase(),
+      url: String(config.url || ""),
+      params: config.params as Record<string, unknown> | undefined,
+      data: config.data,
+    });
+    if (cached !== null && cached !== undefined) {
+      return cached;
+    }
+  }
+  throw toFriendlyError(err);
+}
+
+function isNetworkFailure(err: unknown): boolean {
+  const code = String(
+    (err as { code?: string } | null)?.code || "",
+  ).toUpperCase();
+  if (
+    code === "ECONNABORTED" ||
+    code === "ERR_NETWORK" ||
+    code === "ERR_CANCELED" ||
+    code === "ETIMEDOUT"
+  ) {
+    return true;
+  }
+  // axios 超时无 code 时 message 兜底
+  const message = String(
+    (err as { message?: string } | null)?.message || "",
+  ).toLowerCase();
+  return message.includes("timeout") || message.includes("network");
 }
 
 type ComicDetailPayload = {
@@ -302,9 +389,9 @@ function buildMetadata(type: string, name: string, value: unknown) {
 
 function createActionItem(
   name: unknown,
-  onTap: Record<string, unknown> = {},
-  extern: Record<string, unknown> = {},
-) {
+  onTap: ComicInfoPageAction = { type: "openSearch", payload: {} },
+  extern: Record<string, string> = {},
+): ActionItem {
   return {
     name: String(name ?? ""),
     onTap,
@@ -316,8 +403,8 @@ function createMetadataActionList(
   type: string,
   name: string,
   values: unknown,
-  mapItem?: (value: string) => ReturnType<typeof createActionItem>,
-) {
+  mapItem?: (value: string) => ActionItem,
+): MetadataListItem | null {
   const list = Array.isArray(values) ? values : values == null ? [] : [values];
   const normalized = list
     .map((item) => String(item ?? "").trim())
@@ -340,8 +427,8 @@ function createImage(input: {
   url: unknown;
   name?: unknown;
   path?: unknown;
-  extern?: Record<string, unknown>;
-}) {
+  extern?: Record<string, string>;
+}): ImageItem {
   return {
     id: String(input.id ?? ""),
     url: String(input.url ?? ""),
@@ -351,7 +438,7 @@ function createImage(input: {
   };
 }
 
-function openSearchAction(payload: Record<string, unknown>) {
+function openSearchAction(payload: Record<string, unknown>): OpenSearchAction {
   const source = String(payload.source ?? "").trim();
   const keyword = String(payload.keyword ?? "").trim();
   const inheritedExtern =
@@ -385,13 +472,13 @@ function openSearchAction(payload: Record<string, unknown>) {
   };
 }
 
-function buildJmCoverUrl(item: any): string {
-  const image = String(item?.image ?? "").trim();
+function resolveJmCoverUrl(item: unknown, imageBase: string): string {
+  const record = (item ?? {}) as Record<string, unknown>;
+  const image = String(record.image ?? "").trim();
   if (image.startsWith("http://") || image.startsWith("https://")) {
     return image;
   }
 
-  const imageBase = Config.imagesUrl;
   if (!imageBase) {
     return image;
   }
@@ -404,7 +491,7 @@ function buildJmCoverUrl(item: any): string {
     return `${imageBase}/${image}`;
   }
 
-  const id = String(item?.id ?? "").trim();
+  const id = String(record.id ?? "").trim();
   if (!id) {
     return image;
   }
@@ -412,7 +499,7 @@ function buildJmCoverUrl(item: any): string {
   return `${imageBase}/media/albums/${id}_3x4.jpg`;
 }
 
-function toComicItem(item: any) {
+function toComicItem(item: any, imageBase: string) {
   const id = String(item?.id ?? "");
   return {
     source: JM_PLUGIN_ID,
@@ -425,7 +512,7 @@ function toComicItem(item: any) {
     updatedAt: String(item?.update_at ?? ""),
     cover: {
       id,
-      url: buildJmCoverUrl(item),
+      url: resolveJmCoverUrl(item, imageBase),
       path: `${id}.jpg`,
       extern: {
         path: `${id}.jpg`,
@@ -853,7 +940,7 @@ async function getUserInfoBundle(): Promise<UserInfoBundleContract> {
     }
 
     const refreshed = (await jmRequest({
-      path: `${Config.baseUrl}/login`,
+      path: `${await getApiBaseUrl()}/login`,
       method: "POST",
       formData: { username: account, password },
       cache: false,
@@ -881,6 +968,7 @@ async function getUserInfoBundle(): Promise<UserInfoBundleContract> {
   const exp = String(user.exp ?? "").trim();
   const nextLevelExp = String(user.nextLevelExp ?? "").trim();
   const photo = String(user.photo ?? "").trim();
+  const imageBase = await getImageBaseUrl();
 
   return {
     source: JM_PLUGIN_ID,
@@ -892,7 +980,7 @@ async function getUserInfoBundle(): Promise<UserInfoBundleContract> {
       title: "账号",
       avatar: {
         id: String(user.uid ?? "me"),
-        url: buildJmUserCover(photo),
+        url: buildJmUserCover(photo, imageBase),
         name: photo,
         path: photo ? (photo.endsWith(".jpg") ? photo : `${photo}.jpg`) : "",
         extern: {
@@ -946,7 +1034,7 @@ async function loginWithPassword(payload: JmLoginPayload = {}) {
     throw new Error("账号或密码不能为空");
   }
 
-  const path = `${Config.baseUrl}/login`;
+  const path = `${await getApiBaseUrl()}/login`;
   let result: any;
   try {
     result = await jmRequest({
@@ -994,158 +1082,145 @@ function waitMs(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-function normalizeBaseBaseUrl(url: string): string {
-  const raw = String(url || "").trim();
-  if (!raw) return "";
-  if (raw.startsWith("http://") || raw.startsWith("https://")) {
-    return raw.replace(/\/+$/g, "");
+/** 最近一次选线探针明细, 供 dumpRuntimeInfo 展示. */
+let lastEndpointProbes: EndpointProbe[] = [];
+let lastImageProbes: ImageProbe[] = [];
+
+type HostTextResult = { url: string; text: string };
+
+async function fetchHostText(url: string): Promise<HostTextResult> {
+  const response = await axios.get(url, {
+    timeout: HOSTCFG_TIMEOUT_MS,
+    responseType: "text",
+    validateStatus: () => true,
+  });
+  const status = Number(response.status || 0);
+  if (status < 200 || status >= 300) {
+    throw new Error(`status=${status} url=${url}`);
   }
-  return `https://${raw}`.replace(/\/+$/g, "");
+  return { url, text: String(response.data ?? "") };
 }
 
-async function fetchTextFromAny(urls: string[]) {
-  let lastError: unknown = null;
-  for (const url of urls) {
-    try {
-      const response = await axios.get(url, {
-        timeout: 8000,
-        responseType: "text",
-        validateStatus: () => true,
-      });
-      if (response.status >= 200 && response.status < 300) {
-        return String(response.data ?? "");
-      }
-      lastError = new Error(`status=${response.status} url=${url}`);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError ?? new Error("host config urls unavailable");
-}
-
+/** host 配置双 URL 并发取, 先到先用, 慢路不阻塞. */
 async function loadHostPool(): Promise<string[]> {
-  const raw = await fetchTextFromAny(Config.JM_HOST_CONFIG_URLS);
-  const normalized = raw.replace(/[^A-Za-z0-9+/=]/g, "");
+  const results = await Promise.allSettled(
+    Config.JM_HOST_CONFIG_URLS.map((url) => fetchHostText(url)),
+  );
+  const fulfilled = results.find(
+    (result): result is PromiseFulfilledResult<HostTextResult> =>
+      result.status === "fulfilled" && Boolean(result.value.text.trim()),
+  );
+  if (!fulfilled) {
+    const firstError = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    throw firstError?.reason ?? new Error("host config urls unavailable");
+  }
+  const normalized = fulfilled.value.text.replace(/[^A-Za-z0-9+/=]/g, "");
   const key = await md5Hex(Config.JM_HOSTCFG_AES_SEED);
   const plain = await hostRuntime.aesEcbPkcs7DecryptB64(normalized, key);
   const parsed = JSON.parse(String(plain || "{}")) as { Server?: unknown };
-  if (!Array.isArray(parsed.Server)) return [];
+  if (!Array.isArray(parsed.Server)) {
+    return [];
+  }
   return parsed.Server.map((item) => String(item || "").trim()).filter(Boolean);
 }
 
-async function fetchSettingFromDomain(domain: string, tsSec: string) {
-  const url = `${normalizeBaseBaseUrl(domain)}/setting?app_img_shunt=1&t=${tsSec}`;
-  const token = await md5Hex(`${tsSec}${Config.JM_SECRET}`);
-  const response = await axios.get(url, {
-    timeout: 8000,
-    validateStatus: () => true,
-    headers: {
-      Tokenparam: `${tsSec},${Config.JM_VERSION}`,
-      Token: token,
-    },
+/** 全池 setting 探针选线: 返回按 ok < degraded < dead、延迟排序的可用池. */
+async function resolveOrderedPool(hostPool: string[]) {
+  const probes = await probeAll(hostPool, {
+    timeoutMs: PROBE_TIMEOUT_MS,
+    concurrency: PROBE_CONCURRENCY,
   });
-  if (response.status < 200 || response.status >= 300) {
-    throw new Error(`status=${response.status}`);
-  }
-  const decoded = (await decodeResponsePayload(response.data, tsSec)) as Record<
-    string,
-    unknown
-  > | null;
-  if (!decoded || typeof decoded !== "object") {
-    throw new Error("decode setting response failed");
-  }
-  return decoded;
+  lastEndpointProbes = probes;
+  return orderPool(probes);
 }
 
-async function resolveDynamicHosts() {
-  const hostPool = await loadHostPool();
-  if (!hostPool.length) {
-    throw new Error("empty host pool");
+/**
+ * 图床选优: 从各线路 setting 解出的 img_host 去重, 逐个打轻量探针排序.
+ * setting 无 img_host 时回退 fallback, 保证图床恒有值.
+ */
+async function resolveImagePool(
+  probes: EndpointProbe[],
+  fallback: string,
+): Promise<string[]> {
+  const candidates = Array.from(
+    new Set(
+      probes
+        .map((probe) => probe.setting?.img_host)
+        .map((host) => (typeof host === "string" ? normalizeBaseUrl(host) : ""))
+        .filter(Boolean),
+    ),
+  );
+  if (candidates.length === 0) {
+    return [fallback || Config.JM_FALLBACK_IMAGE_BASE];
   }
+  const results: ImageProbe[] = [];
+  const queue = [...candidates];
+  const workers = Array.from(
+    { length: Math.min(PROBE_CONCURRENCY, queue.length) },
+    async () => {
+      while (queue.length > 0) {
+        const candidate = queue.shift()!;
+        results.push(await probeImageHost(candidate, PROBE_TIMEOUT_MS));
+      }
+    },
+  );
+  await Promise.all(workers);
+  lastImageProbes = results;
+  const ordered = orderImagePool(results);
+  return ordered.length > 0 ? ordered : [fallback || Config.JM_FALLBACK_IMAGE_BASE];
+}
 
-  const tsSec = String(Math.floor(Date.now() / 1000));
-  let picked = "";
-  let setting: Record<string, unknown> | null = null;
-  for (const domain of hostPool) {
-    try {
-      setting = await fetchSettingFromDomain(domain, tsSec);
-      picked = normalizeBaseBaseUrl(domain);
-      if (setting) break;
-    } catch {
-      // try next domain
-    }
-  }
-
-  if (!setting) {
-    throw new Error("all setting endpoints failed");
-  }
-
-  const imageBaseUrl = normalizeBaseBaseUrl(String(setting.img_host ?? ""));
-  const rawBaseUrls = [
-    picked,
-    ...hostPool.map((item) => normalizeBaseBaseUrl(item)),
-  ].filter(Boolean);
-
-  return {
-    imageBaseUrl: imageBaseUrl || Config.JM_FALLBACK_IMAGE_BASE,
-    baseUrls: Array.from(new Set(rawBaseUrls)),
-  };
+async function applyOrderedPool(
+  ordered: string[],
+  imagePool: string[],
+  hostPool: string[],
+): Promise<string> {
+  const pool =
+    ordered.length > 0
+      ? ordered
+      : [ordered[0] ?? hostPool[0] ?? Config.JM_FALLBACK_API_BASE];
+  const apiBaseUrl = pool[0]!;
+  const image = imagePool[0] ?? Config.JM_FALLBACK_IMAGE_BASE;
+  await setRuntimeEndpointCache({
+    apiBaseUrl,
+    imageBaseUrl: image,
+    imagePool,
+    hostPool: pool,
+  });
+  return apiBaseUrl;
 }
 
 async function resolveFastestBases() {
   const cached = await getRuntimeEndpointCache();
   if (cached) {
-    Config.baseUrls = [cached.apiBaseUrl];
-    Config.imagesUrls = [cached.imageBaseUrl];
-    Config.baseUrlIndex = 0;
-    Config.imagesUrlIndex = 0;
     return { data: cached.apiBaseUrl };
   }
 
-  let baseCandidates = [Config.JM_FALLBACK_API_BASE];
-  let imageCandidate = Config.JM_FALLBACK_IMAGE_BASE;
+  let data = Config.JM_FALLBACK_API_BASE;
+  const imageCandidate = Config.JM_FALLBACK_IMAGE_BASE;
+  let hostPool: string[] = [];
   try {
-    const dynamic = await resolveDynamicHosts();
-    baseCandidates =
-      dynamic.baseUrls.length > 0
-        ? dynamic.baseUrls
-        : [Config.JM_FALLBACK_API_BASE];
-    imageCandidate = dynamic.imageBaseUrl || Config.JM_FALLBACK_IMAGE_BASE;
+    hostPool = await loadHostPool();
   } catch (error) {
-    console.warn("[jm.init] resolve dynamic hosts failed", error);
+    console.warn("[jm.init] load host pool failed", error);
   }
-
-  Config.baseUrls = baseCandidates;
-  Config.imagesUrls = [imageCandidate];
-
-  try {
-    const apiIdx = await getFastestUrlIndex(Config.baseUrls);
-    Config.baseUrlIndex = apiIdx;
-  } catch (error) {
-    console.warn("[jm.init] choose fastest api base failed", error);
+  if (hostPool.length === 0) {
+    hostPool = [Config.JM_FALLBACK_API_BASE];
   }
 
   try {
-    const imageIdx = await getFastestUrlIndex(Config.imagesUrls);
-    Config.imagesUrlIndex = imageIdx;
+    const { ordered, probes } = await resolveOrderedPool(hostPool);
+    if (ordered.length === 0) {
+      data = await applyOrderedPool([], [imageCandidate], hostPool);
+    } else {
+      const imagePool = await resolveImagePool(probes, imageCandidate);
+      data = await applyOrderedPool(ordered, imagePool, hostPool);
+    }
   } catch (error) {
-    console.warn("[jm.init] choose fastest image base failed", error);
-  }
-
-  const data = Config.baseUrl || Config.JM_FALLBACK_API_BASE;
-  Config.baseUrls = [data];
-  Config.baseUrlIndex = 0;
-  Config.imagesUrls = [Config.imagesUrl || Config.JM_FALLBACK_IMAGE_BASE];
-  Config.imagesUrlIndex = 0;
-
-  try {
-    await setRuntimeEndpointCache({
-      apiBaseUrl: Config.baseUrl,
-      imageBaseUrl: Config.imagesUrl,
-      hostPool: baseCandidates,
-    });
-  } catch (error) {
-    console.warn("[jm.init] cache hostRuntime endpoints failed", error);
+    console.warn("[jm.init] probe setting endpoints failed", error);
+    data = await applyOrderedPool([], [imageCandidate], hostPool);
   }
 
   return { data };
@@ -1165,7 +1240,7 @@ async function tryJmCheckin() {
   while (retryCount <= maxRetries) {
     try {
       const dailyListRes = await jmRequest({
-        url: `${Config.baseUrl}/daily_list/filter`,
+        url: `${await getApiBaseUrl()}/daily_list/filter`,
         method: "POST",
         formData: {
           data: String(new Date().getFullYear()),
@@ -1185,7 +1260,7 @@ async function tryJmCheckin() {
       }
 
       const chkRes = await jmRequest({
-        url: `${Config.baseUrl}/daily_chk`,
+        url: `${await getApiBaseUrl()}/daily_chk`,
         method: "POST",
         formData: {
           user_id: uid,
@@ -1242,7 +1317,7 @@ async function runJmAuthAndCheckInLoop() {
         const data = await loginWithPassword({
           account,
           password,
-          path: `${Config.baseUrl}/login`,
+          path: `${await getApiBaseUrl()}/login`,
         });
 
         console.info(data);
@@ -1269,19 +1344,21 @@ async function runJmAuthAndCheckInLoop() {
 }
 
 async function init() {
+  console.debug("init");
   await resolveFastestBases();
   if (!jmInitStarted) {
     jmInitStarted = true;
     void runJmAuthAndCheckInLoop();
   }
 
+  const endpoints = await getEndpoints();
   return {
     source: JM_PLUGIN_ID,
     data: {
       ok: true,
       started: true,
-      runtimeImageBaseUrl: Config.imagesUrl,
-      fastestApiBase: Config.baseUrl,
+      runtimeImageBaseUrl: endpoints.imageBaseUrl,
+      fastestApiBase: endpoints.apiBaseUrl,
     },
   };
 }
@@ -1358,7 +1435,7 @@ async function getCloudFavoriteFilterBundle(
   payload: JmCloudFavoritePayload = {},
 ): Promise<FilterBundleContract> {
   const extern = toStringMap(payload.extern);
-  const path = `${Config.baseUrl}/favorite`;
+  const path = `${await getApiBaseUrl()}/favorite`;
   const raw = (await jmRequest({
     path,
     method: "GET",
@@ -1661,6 +1738,7 @@ async function clearPluginSession() {
     pluginConfig.save("auth.password", JSON.stringify("")),
     pluginConfig.save("auth.jwt", JSON.stringify("")),
     pluginConfig.save("auth.userInfo", JSON.stringify({})),
+    clearRuntimeEndpointCache(),
   ]);
 
   return {
@@ -1670,11 +1748,39 @@ async function clearPluginSession() {
 }
 
 async function dumpRuntimeInfo() {
+  const probes = lastEndpointProbes.map((probe) => {
+    const outcome = probe.outcome;
+    return {
+      baseUrl: probe.baseUrl,
+      status: outcome.status,
+      latencyMs: outcome.status === "dead" ? null : outcome.latencyMs,
+      httpStatus: outcome.status === "degraded" ? outcome.httpStatus : null,
+      reason: outcome.status === "dead" ? outcome.reason : null,
+    };
+  });
+  const imageProbes = lastImageProbes.map((probe) => {
+    const outcome = probe.outcome;
+    return {
+      baseUrl: probe.baseUrl,
+      status: outcome.status,
+      latencyMs: outcome.status === "dead" ? null : outcome.latencyMs,
+      httpStatus: outcome.status === "degraded" ? outcome.httpStatus : null,
+      reason: outcome.status === "dead" ? outcome.reason : null,
+    };
+  });
+  const endpoints = await getEndpoints();
   return {
     ok: true,
     data: {
       pluginName: "jmComic",
       now: new Date().toISOString(),
+      apiBaseUrl: endpoints.apiBaseUrl,
+      imageBaseUrl: endpoints.imageBaseUrl,
+      apiPool: [...endpoints.hostPool],
+      imagePool: [...endpoints.imagePool],
+      probeTimeoutMs: PROBE_TIMEOUT_MS,
+      probes,
+      imageProbes,
     },
   };
 }
@@ -1695,7 +1801,8 @@ async function getComicDetail(
     throw new Error("comicId 不能为空");
   }
 
-  const path = `${Config.baseUrl}/album`;
+  const path = `${await getApiBaseUrl()}/album`;
+  const imageBase = await getImageBaseUrl();
 
   const response = (await jmRequest({
     path,
@@ -1751,13 +1858,13 @@ async function getComicDetail(
           url: "",
           name: "",
         }),
-        onTap: {},
+        onTap: { type: "openSearch", payload: {} },
         extern: {},
       },
       description: normalizedInfo.description,
       cover: createImage({
         id: String(normalizedInfo.id),
-        url: buildJmCoverUrl(normalizedInfo),
+        url: resolveJmCoverUrl(normalizedInfo, imageBase),
         path: `${normalizedInfo.id}.jpg`,
         extern: {},
       }),
@@ -1834,7 +1941,7 @@ async function getComicDetail(
     })(),
     recommend: (normalizedInfo.related_list as any[]).map(
       (item: any): RecommendItem => {
-        const unifiedItem = toComicItem(item);
+        const unifiedItem = toComicItem(item, imageBase);
         return {
           source: JM_PLUGIN_ID,
           id: unifiedItem.id,
@@ -1846,7 +1953,7 @@ async function getComicDetail(
           updatedAt: unifiedItem.updatedAt,
           cover: createImage({
             id: unifiedItem.id,
-            url: buildJmCoverUrl(item),
+            url: resolveJmCoverUrl(item, imageBase),
             path: `${unifiedItem.id}.jpg`,
             extern: {},
           }),
@@ -1894,13 +2001,14 @@ async function getComicDetail(
 
 async function searchComic(payload: JmSearchPayload = {}) {
   const extern = toStringMap(payload.extern);
+  const imageBase = await getImageBaseUrl();
   const page = Math.max(1, toNum(payload.page, 1));
   const keyword = String(payload.keyword ?? extern.keyword ?? "").trim();
   const keywordLower = keyword.toLowerCase();
   const order = String(extern.sort ?? sortByToOrder(extern.sortBy)).trim();
   const path =
     String(payload.path ?? extern.path ?? "").trim() ||
-    `${Config.baseUrl}/search`;
+    `${await getApiBaseUrl()}/search`;
   const searchPageSize = 80;
   const buildResult = (content: any[], total: number) => {
     const scheme = {
@@ -1920,7 +2028,7 @@ async function searchComic(payload: JmSearchPayload = {}) {
           content.length < searchPageSize ||
           (total > 0 && (page - 1) * searchPageSize + content.length >= total),
       },
-      items: content.map((item: any) => toComicItem(item)),
+      items: content.map((item: any) => toComicItem(item, imageBase)),
     };
 
     return {
@@ -2005,7 +2113,7 @@ function buildHomeSectionAction(section: any) {
           fnPath: "getPromoteListData",
           core: {
             id: toNum(id),
-            path: `${Config.baseUrl}/promote_list`,
+            path: "/promote_list",
           },
           extern: {
             source: "promoteList",
@@ -2089,7 +2197,7 @@ async function getHomeRecommendData(payload: JmHomePayload = {}) {
   const extern = toStringMap(payload.extern);
   const promotePath =
     String(payload.path ?? extern.promotePath ?? "").trim() ||
-    `${Config.baseUrl}/promote?page=0`;
+    `${await getApiBaseUrl()}/promote?page=0`;
 
   const promote = await jmRequest({
     path: promotePath,
@@ -2106,6 +2214,7 @@ async function getHomeRecommendData(payload: JmHomePayload = {}) {
     })),
   );
 
+  const imageBase = await getImageBaseUrl();
   const sections = normalizedSections
     .filter((section: any) => {
       const title = String(section?.title ?? "");
@@ -2122,7 +2231,7 @@ async function getHomeRecommendData(payload: JmHomePayload = {}) {
         key: "items",
       },
       items: (Array.isArray(section?.content) ? section.content : []).map(
-        toComicItem,
+        (item: any) => toComicItem(item, imageBase),
       ),
       raw: section,
     }));
@@ -2146,7 +2255,7 @@ async function getHomeLatestData(payload: JmHomePayload = {}) {
   const page = Number.isFinite(Number(payload.page)) ? Number(payload.page) : 0;
   const path =
     String(payload.path ?? extern.suggestionPath ?? "").trim() ||
-    `${Config.baseUrl}/latest`;
+    `${await getApiBaseUrl()}/latest`;
   const suggestion = await jmRequest({
     path,
     method: "GET",
@@ -2156,8 +2265,9 @@ async function getHomeLatestData(payload: JmHomePayload = {}) {
     jwtToken: payload.jwtToken,
   });
 
+  const imageBase = await getImageBaseUrl();
   const suggestionItems = (Array.isArray(suggestion) ? suggestion : []).map(
-    toComicItem,
+    (item: any) => toComicItem(item, imageBase),
   );
 
   return {
@@ -2180,7 +2290,8 @@ async function getRankingData(payload: JmRankingPayload = {}) {
   const extern = toStringMap(payload.extern);
   const c = String(extern.type ?? extern.c ?? "");
   const o = String(extern.order ?? extern.o ?? "");
-  const path = `${Config.baseUrl}/categories/filter`;
+  const path = `${await getApiBaseUrl()}/categories/filter`;
+  const imageBase = await getImageBaseUrl();
   const rankingPageSize = 80;
 
   const raw = await jmRequest({
@@ -2214,7 +2325,7 @@ async function getRankingData(payload: JmRankingPayload = {}) {
       page,
       total,
       hasReachedMax,
-      items: content.map((item: any) => toComicItem(item)),
+      items: content.map((item: any) => toComicItem(item, imageBase)),
       raw,
     },
   };
@@ -2224,7 +2335,8 @@ async function getPromoteListData(payload: JmPromoteListPayload = {}) {
   console.debug(payload);
   const id = toNum(payload.id, 0);
   const page = Math.max(0, toNum(payload.page, 0));
-  const path = `${Config.baseUrl}/promote_list`;
+  const path = `${await getApiBaseUrl()}/promote_list`;
+  const imageBase = await getImageBaseUrl();
   const pageSize = 27;
 
   const raw = (await jmRequest({
@@ -2257,7 +2369,7 @@ async function getPromoteListData(payload: JmPromoteListPayload = {}) {
       page,
       total,
       hasReachedMax,
-      items: list.map((item: any) => toComicItem(item)),
+      items: list.map((item: any) => toComicItem(item, imageBase)),
       raw,
     },
   };
@@ -2265,6 +2377,7 @@ async function getPromoteListData(payload: JmPromoteListPayload = {}) {
 
 async function getLatestData(payload: JmRankingPayload = {}) {
   const page = Math.max(1, toNum(payload.page, 1));
+  const imageBase = await getImageBaseUrl();
   if (page == 1) {
     const latest = await getHomeLatestData({
       page: 0,
@@ -2294,7 +2407,7 @@ async function getLatestData(payload: JmRankingPayload = {}) {
   }
 
   const requestPage = Math.max(0, page - 1);
-  const path = `${Config.baseUrl}/latest`;
+  const path = `${await getApiBaseUrl()}/latest`;
   const pageSize = 80;
   const raw = await jmRequest({
     path,
@@ -2319,7 +2432,7 @@ async function getLatestData(payload: JmRankingPayload = {}) {
     data: {
       page,
       hasReachedMax: list.length === 0 || list.length < pageSize,
-      items: list.map((item: any) => toComicItem(item)),
+      items: list.map((item: any) => toComicItem(item, imageBase)),
       raw,
     },
   };
@@ -2327,10 +2440,11 @@ async function getLatestData(payload: JmRankingPayload = {}) {
 
 async function getCloudFavoriteData(payload: JmCloudFavoritePayload = {}) {
   const page = Math.max(1, toNum(payload.page, 1));
+  const imageBase = await getImageBaseUrl();
   const extern = toStringMap(payload.extern);
   const folderId = String(payload.folderId ?? extern.folderId ?? "");
   const order = String(payload.order ?? extern.order ?? "mr") || "mr";
-  const path = `${Config.baseUrl}/favorite`;
+  const path = `${await getApiBaseUrl()}/favorite`;
   const raw = (await jmRequest({
     path,
     method: "GET",
@@ -2356,7 +2470,7 @@ async function getCloudFavoriteData(payload: JmCloudFavoritePayload = {}) {
       page,
       total,
       hasReachedMax,
-      items: list.map((item: any) => toComicItem(item)),
+      items: list.map((item: any) => toComicItem(item, imageBase)),
       raw,
     },
   };
@@ -2381,7 +2495,7 @@ async function toggleLike(
     };
   }
 
-  const path = `${Config.baseUrl}/like`;
+  const path = `${await getApiBaseUrl()}/like`;
   await jmRequest({
     path,
     method: "POST",
@@ -2404,7 +2518,7 @@ async function toggleFavorite(
     throw new Error("comicId 不能为空");
   }
 
-  const path = `${Config.baseUrl}/favorite`;
+  const path = `${await getApiBaseUrl()}/favorite`;
   const res = await jmRequest({
     path,
     method: "POST",
@@ -2431,7 +2545,7 @@ async function toggleFavorite(
 async function listFavoriteFolders(
   payload: JmFavoriteFolderPayload = {},
 ): Promise<ListFavoriteFoldersResult> {
-  const path = `${Config.baseUrl}/favorite`;
+  const path = `${await getApiBaseUrl()}/favorite`;
   const raw = (await jmRequest({
     path,
     method: "GET",
@@ -2458,7 +2572,7 @@ async function moveFavoriteToFolder(payload: JmFavoriteFolderPayload = {}) {
     throw new Error("comicId 或 folderId 不能为空");
   }
 
-  const path = `${Config.baseUrl}/favorite_folder`;
+  const path = `${await getApiBaseUrl()}/favorite_folder`;
   await jmRequest({
     path,
     method: "POST",
@@ -2478,7 +2592,7 @@ async function moveFavoriteToFolder(payload: JmFavoriteFolderPayload = {}) {
   };
 }
 
-function buildJmUserCover(photo: unknown): string {
+function buildJmUserCover(photo: unknown, imageBase: string): string {
   const file = String(photo ?? "").trim();
   if (!file) {
     return "";
@@ -2486,10 +2600,10 @@ function buildJmUserCover(photo: unknown): string {
   if (file.startsWith("http://") || file.startsWith("https://")) {
     return file;
   }
-  return `${Config.imagesUrl}/media/users/${file}`;
+  return `${imageBase}/media/users/${file}`;
 }
 
-function mapJmReplyItem(item: any) {
+function mapJmReplyItem(item: any, imageBase: string) {
   const id = String(item?.CID ?? "");
   const photo = String(item?.photo ?? "").trim();
   return {
@@ -2497,7 +2611,7 @@ function mapJmReplyItem(item: any) {
     author: {
       name: String(item?.nickname ?? item?.username ?? "匿名用户"),
       avatar: {
-        url: buildJmUserCover(photo),
+        url: buildJmUserCover(photo, imageBase),
         path: photo ? `${String(item?.UID ?? "")}.jpg` : "",
         extern: {
           path: photo ? `${String(item?.UID ?? "")}.jpg` : "",
@@ -2512,7 +2626,7 @@ function mapJmReplyItem(item: any) {
   };
 }
 
-function mapJmCommentItem(item: any) {
+function mapJmCommentItem(item: any, imageBase: string) {
   const id = String(item?.CID ?? "");
   const photo = String(item?.photo ?? "").trim();
   const replies = Array.isArray(item?.replys) ? item.replys : [];
@@ -2521,7 +2635,7 @@ function mapJmCommentItem(item: any) {
     author: {
       name: String(item?.nickname ?? item?.username ?? "匿名用户"),
       avatar: {
-        url: buildJmUserCover(photo),
+        url: buildJmUserCover(photo, imageBase),
         path: photo ? `${String(item?.UID ?? "")}.jpg` : "",
         extern: {
           path: photo ? `${String(item?.UID ?? "")}.jpg` : "",
@@ -2531,7 +2645,7 @@ function mapJmCommentItem(item: any) {
     content: stripHtmlTags(item?.content),
     createdAt: formatDisplayTime(item?.addtime),
     replyCount: replies.length,
-    replies: replies.map((reply: any) => mapJmReplyItem(reply)),
+    replies: replies.map((reply: any) => mapJmReplyItem(reply, imageBase)),
     extern: {
       commentId: id,
     },
@@ -2547,7 +2661,8 @@ async function getCommentFeed(
     throw new Error("comicId 不能为空");
   }
 
-  const path = `${Config.baseUrl}/forum`;
+  const path = `${await getApiBaseUrl()}/forum`;
+  const imageBase = await getImageBaseUrl();
   const raw = (await jmRequest({
     path,
     method: "GET",
@@ -2579,7 +2694,7 @@ async function getCommentFeed(
         hasReachedMax,
       },
       topItems: [],
-      items: list.map((item: any) => mapJmCommentItem(item)),
+      items: list.map((item: any) => mapJmCommentItem(item, imageBase)),
     },
   };
 }
@@ -2588,7 +2703,8 @@ async function getWeekRankingData(payload: JmWeekRankingPayload = {}) {
   const date = toNum(payload.date, 0);
   const type = String(payload.type ?? "all");
   const page = Math.max(1, toNum(payload.page, 1));
-  const path = `${Config.baseUrl}/serialization`;
+  const path = `${await getApiBaseUrl()}/serialization`;
+  const imageBase = await getImageBaseUrl();
   const pageSize = 40;
 
   const raw = await jmRequest({
@@ -2636,7 +2752,7 @@ async function getWeekRankingData(payload: JmWeekRankingPayload = {}) {
       date,
       page,
       hasReachedMax,
-      items: list.map((item: any) => toComicItem(item)),
+      items: list.map((item: any) => toComicItem(item, imageBase)),
       raw,
     },
   };
@@ -2649,7 +2765,7 @@ async function getChapter(payload: JmChapterPayload = {}) {
     throw new Error("chapterId 不能为空");
   }
 
-  const path = `${Config.baseUrl}/chapter`;
+  const path = `${await getApiBaseUrl()}/chapter`;
   const response = (await jmRequest({
     path,
     method: "GET",
@@ -2663,7 +2779,7 @@ async function getChapter(payload: JmChapterPayload = {}) {
   })) as Record<string, any>;
 
   const images = Array.isArray(response.images) ? response.images : [];
-  const imageBase = String(Config.imagesUrl).trim();
+  const imageBase = String(await getImageBaseUrl()).trim();
   const docs = images.map((image) => ({
     name: String(image ?? ""),
     path: String(image ?? ""),
@@ -2887,36 +3003,6 @@ async function getReadSnapshot(payload: JmReadSnapshotPayload = {}) {
   return result;
 }
 
-async function testUrlSpeed(url: string) {
-  const start = Date.now();
-  try {
-    await axios.get(url, { timeout: 5000 });
-    return { url, duration: Date.now() - start };
-  } catch (error) {
-    return { url, duration: null };
-  }
-}
-
-async function getFastestUrlIndex(urls: string[]) {
-  if (!urls || urls.length === 0) return 0;
-
-  const testPromises = urls.map((url) => testUrlSpeed(url));
-
-  const results = await Promise.all(testPromises);
-
-  const successfulResults = results.filter((r) => r.duration !== null);
-
-  if (successfulResults.length === 0) {
-    return 0;
-  }
-
-  const fastestResult = successfulResults.reduce((prev, curr) =>
-    curr.duration < prev.duration ? curr : prev,
-  );
-
-  return urls.indexOf(fastestResult.url);
-}
-
 export default {
   init,
   jmRequest,
@@ -2952,5 +3038,8 @@ export default {
   getChapter,
   getReadSnapshot,
   fetchImageBytes,
-  getFastestUrlIndex,
 };
+
+export function getLastEndpointProbes(): EndpointProbe[] {
+  return lastEndpointProbes;
+}

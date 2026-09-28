@@ -2,10 +2,12 @@ import { setJwtToken } from "./state";
 import type { JmRequestConfig, RequestPayload } from "./types";
 import { nowTs, toQueryString } from "./utils";
 
-export async function buildRequestConfig(input: RequestPayload): Promise<{
+export type BuiltRequest = {
   config: JmRequestConfig;
   cacheEnabled: boolean;
-}> {
+};
+
+export async function buildRequestConfig(input: RequestPayload): Promise<BuiltRequest> {
   const method = String(input.method || "GET").toUpperCase();
   const url = String(input.path || input.url || "").trim();
   if (!url) {
