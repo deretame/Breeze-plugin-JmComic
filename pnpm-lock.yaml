@@ -170,8 +170,8 @@ importers:
         specifier: ^1.20.0
         version: 1.20.0(debug@4.4.3)
       breeze-plugin-kit:
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: ^0.12.0
+        version: 0.12.0
     devDependencies:
       '@rspack/cli':
         specifier: ^2.2.7
@@ -486,8 +486,8 @@ packages:
   axios@1.20.0:
     resolution: {integrity: sha512-r8aOh8j9cGKpgQAqpzrUHnSIc6a59Y3Xf/cv8sy1DrHCkZHzQGEuoq1tARk6qSyDdtQGSDgpb9kFlruzPvrgwg==}
 
-  breeze-plugin-kit@0.8.0:
-    resolution: {integrity: sha512-VIX14pYKhc7pFGtm4/k1NWxECAuCmDtAQinKelPNinfRxO/apzuxuAmSD+2Cg5NQSwR9nLdDpY2oE//ToQPARg==}
+  breeze-plugin-kit@0.12.0:
+    resolution: {integrity: sha512-qSFLxncsZeu83omDgw3w4/L28NX1LZ5sukxXFYoMrBlij7kkqJ3u7jYuGiptDCplnkWJ0K7ailRh/zTjL1fJjg==}
 
   call-bind-apply-helpers@1.0.2:
     resolution: {integrity: sha512-Sp1ablJ0ivDkSzjcaJdxEunN5/XvksFJ2sMBFfq6x0ryhQV/2b/KwFe21cMpmHtPOSij8K99/wSfoEuTObmuMQ==}
@@ -851,7 +851,7 @@ snapshots:
       - debug
       - supports-color
 
-  breeze-plugin-kit@0.8.0: {}
+  breeze-plugin-kit@0.12.0: {}
 
   call-bind-apply-helpers@1.0.2:
     dependencies:

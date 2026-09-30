@@ -14,7 +14,7 @@ export function randomDeviceId(): string {
 }
 
 export async function md5Hex(text: string): Promise<string> {
-  return hostRuntime.md5Hex(text);
+  return hostRuntime.crypto.md5(text);
 }
 
 export function getHost(url: string): string {

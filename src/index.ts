@@ -9,6 +9,10 @@ import type {
   ComicInfoPageAction,
   ComicListSceneBundleContract,
   CommentFeedContract,
+  FavoriteWorkflowContinuePayload,
+  FavoriteWorkflowInput,
+  FavoriteWorkflowResult,
+  FavoriteWorkflowStartPayload,
   FilterBundleContract,
   FunctionPageContract,
   ImageItem,
@@ -42,7 +46,7 @@ import {
 } from "./endpoint-pool";
 import type { EndpointProbe, ImageProbe } from "./endpoint-pool";
 import { toFriendlyError } from "./errors";
-import { buildPluginInfo } from "./get-info";
+import { buildJmCloudFavoriteScene, buildPluginInfo } from "./get-info";
 import type { BuiltRequest } from "./request-config";
 import { buildRequestConfig } from "./request-config";
 import {
@@ -1118,7 +1122,11 @@ async function loadHostPool(): Promise<string[]> {
   }
   const normalized = fulfilled.value.text.replace(/[^A-Za-z0-9+/=]/g, "");
   const key = await md5Hex(Config.JM_HOSTCFG_AES_SEED);
-  const plain = await hostRuntime.aesEcbPkcs7DecryptB64(normalized, key);
+  const decrypted = await hostRuntime.crypto.aesEcbPkcs7Decrypt(
+    bytesFromBase64(normalized),
+    key,
+  );
+  const plain = new TextDecoder("utf-8").decode(decrypted);
   const parsed = JSON.parse(String(plain || "{}")) as { Server?: unknown };
   if (!Array.isArray(parsed.Server)) {
     return [];
@@ -1417,20 +1425,6 @@ function buildJmLatestScene() {
   });
 }
 
-function buildJmCloudFavoriteScene() {
-  return buildComicListScene({
-    title: "云端收藏",
-    list: {
-      fnPath: "getCloudFavoriteData",
-      extern: { source: "cloudFavorite", order: "mr", folderId: "" },
-    },
-    filter: {
-      fnPath: "getCloudFavoriteFilterBundle",
-      extern: { source: "cloudFavorite" },
-    },
-  });
-}
-
 async function getCloudFavoriteFilterBundle(
   payload: JmCloudFavoritePayload = {},
 ): Promise<FilterBundleContract> {
@@ -1508,7 +1502,7 @@ async function getCloudFavoriteSceneBundle(): Promise<ComicListSceneBundleContra
       type: "comicListSceneBundle",
     },
     data: {
-      scene: buildJmCloudFavoriteScene() as any,
+      scene: buildJmCloudFavoriteScene(),
     },
   };
 }
@@ -1957,11 +1951,21 @@ async function getComicDetail(
             path: `${unifiedItem.id}.jpg`,
             extern: {},
           }),
-          metadata: [],
+          metadata: [item?.author, item?.tags, item?.works, item?.actors]
+            .flatMap((value: unknown) =>
+              Array.isArray(value) ? value : value == null ? [] : [value],
+            )
+            .map((value) => String(value ?? "").trim())
+            .filter((value) => value.length > 0)
+            .slice(0, 6)
+            .map((value) =>
+              createActionItem(
+                value,
+                openSearchAction({ source: JM_PLUGIN_ID, keyword: value }),
+              ),
+            ),
           raw: unifiedItem.raw,
-          extern: {
-            unifiedItem,
-          },
+          extern: {},
         };
       },
     ),
@@ -2591,6 +2595,257 @@ async function moveFavoriteToFolder(payload: JmFavoriteFolderPayload = {}) {
     ok: true,
   };
 }
+const JM_FAVORITE_CONTINUATION_PREFIX = "jm-favorite:v1:";
+const JM_FAVORITE_CONTINUATION_TTL_MS = 15 * 60 * 1000;
+
+type JmFavoriteContinuation = {
+  action: "add" | "move";
+  comicId: string;
+  currentFavorite: boolean;
+  folderIds: string[];
+  createdAt: number;
+};
+
+type JmFavoriteFolder = { id: string; name: string };
+
+function favoriteFailure(
+  error: unknown,
+  currentFavorite = false,
+): FavoriteWorkflowResult {
+  return {
+    status: "failed",
+    favorited: currentFavorite,
+    committed: false,
+    message: error instanceof Error ? error.message : String(error),
+    errorCode: "FAVORITE_WORKFLOW_FAILED",
+  };
+}
+
+function encodeFavoriteContinuation(value: JmFavoriteContinuation): string {
+  return `${JM_FAVORITE_CONTINUATION_PREFIX}${encodeURIComponent(
+    JSON.stringify(value),
+  )}`;
+}
+
+function decodeFavoriteContinuation(
+  value: string,
+): JmFavoriteContinuation | null {
+  const raw = String(value ?? "");
+  if (!raw.startsWith(JM_FAVORITE_CONTINUATION_PREFIX)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(
+      decodeURIComponent(raw.slice(JM_FAVORITE_CONTINUATION_PREFIX.length)),
+    ) as Partial<JmFavoriteContinuation>;
+    const comicId = String(parsed.comicId ?? "").trim();
+    const folderIds = Array.isArray(parsed.folderIds)
+      ? parsed.folderIds
+          .map((item) => String(item ?? "").trim())
+          .filter((item) => item.length > 0)
+      : [];
+    const createdAt = Number(parsed.createdAt ?? 0);
+    if (
+      (parsed.action !== "add" && parsed.action !== "move") ||
+      !comicId ||
+      folderIds.length === 0 ||
+      !Number.isFinite(createdAt) ||
+      Date.now() - createdAt > JM_FAVORITE_CONTINUATION_TTL_MS
+    ) {
+      return null;
+    }
+    return {
+      action: parsed.action,
+      comicId,
+      currentFavorite: parsed.currentFavorite === true,
+      folderIds,
+      createdAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+type JmWorkflowAuth = { useJwt?: boolean; jwtToken?: string };
+
+function readJmWorkflowAuth(extern: Record<string, unknown>): JmWorkflowAuth {
+  const useJwt =
+    "useJwt" in extern && typeof extern.useJwt === "boolean"
+      ? extern.useJwt
+      : undefined;
+  const jwtToken =
+    "jwtToken" in extern && typeof extern.jwtToken === "string"
+      ? extern.jwtToken
+      : undefined;
+  return { useJwt, jwtToken };
+}
+
+async function fetchJmFavoriteFolders(
+  input: JmWorkflowAuth,
+): Promise<JmFavoriteFolder[]> {
+  const raw = await jmRequest({
+    path: `${await getApiBaseUrl()}/favorite`,
+    method: "GET",
+    params: { page: 1, folder_id: "", o: "mr" },
+    cache: false,
+    useJwt: input.useJwt ?? true,
+    jwtToken: input.jwtToken,
+  });
+  const folderList =
+    raw && typeof raw === "object" && "folder_list" in raw ? raw.folder_list : [];
+  const folders = Array.isArray(folderList) ? folderList : [];
+  return folders
+    .map((item) => {
+      const record = toStringMap(item);
+      return {
+        id: String(record.FID ?? "").trim(),
+        name: String(record.name ?? "").trim(),
+      };
+    })
+    .filter((item) => item.id.length > 0);
+}
+
+async function addJmFavorite(
+  comicId: string,
+  input: JmWorkflowAuth,
+): Promise<void> {
+  const res = await jmRequest({
+    path: `${await getApiBaseUrl()}/favorite`,
+    method: "POST",
+    formData: { aid: comicId },
+    cache: false,
+    useJwt: input.useJwt ?? true,
+    jwtToken: input.jwtToken,
+  });
+  const rawMsg = res && typeof res === "object" && "msg" in res ? res.msg : "";
+  if (String(rawMsg ?? "").includes("已满")) {
+    await flutterTools.showToast({ message: "收藏数已达上限", level: "warning" });
+  }
+}
+
+async function moveJmFavorite(
+  comicId: string,
+  folderId: string,
+  input: JmWorkflowAuth,
+): Promise<void> {
+  await jmRequest({
+    path: `${await getApiBaseUrl()}/favorite_folder`,
+    method: "POST",
+    formData: {
+      type: "move",
+      folder_id: folderId,
+      folder_name: "",
+      aid: comicId,
+    },
+    cache: false,
+    useJwt: input.useJwt ?? true,
+    jwtToken: input.jwtToken,
+  });
+}
+
+function buildJmFavoriteFolderInput(
+  folders: JmFavoriteFolder[],
+  title: string,
+  description: string,
+): FavoriteWorkflowInput {
+  return {
+    type: "select",
+    key: "folderId",
+    title,
+    description,
+    required: true,
+    selection: "single",
+    options: folders.map((folder) => ({
+      id: folder.id,
+      label: folder.name || folder.id,
+    })),
+  };
+}
+
+async function startFavoriteAction(
+  payload: Partial<FavoriteWorkflowStartPayload> = {},
+): Promise<FavoriteWorkflowResult> {
+  const comicId = String(payload.comicId ?? "").trim();
+  const action = payload.action;
+  if (!comicId) {
+    return favoriteFailure(new Error("comicId 不能为空"), false);
+  }
+  if (action === "add" || action === "move") {
+    try {
+      const folders = await fetchJmFavoriteFolders(
+        readJmWorkflowAuth(toStringMap(payload.extern)),
+      );
+      if (folders.length === 0) {
+        return favoriteFailure(
+          new Error("未能获取收藏夹列表"),
+          action === "move",
+        );
+      }
+      return {
+        status: "awaitingInput",
+        favorited: action === "move",
+        committed: false,
+        continuationToken: encodeFavoriteContinuation({
+          action,
+          comicId,
+          currentFavorite: action === "move",
+          folderIds: folders.map((folder) => folder.id),
+          createdAt: Date.now(),
+        }),
+        input: buildJmFavoriteFolderInput(
+          folders,
+          action === "add" ? "加入收藏" : "移动到收藏夹",
+          action === "add" ? "请选择收藏夹" : "请选择目标收藏夹",
+        ),
+      };
+    } catch (error) {
+      return favoriteFailure(error, action === "move");
+    }
+  }
+  return favoriteFailure(
+    new Error("当前图源只支持收藏与移动到收藏夹"),
+    action === "removeFromTarget",
+  );
+}
+
+async function continueFavoriteAction(
+  payload: Partial<FavoriteWorkflowContinuePayload> = {},
+): Promise<FavoriteWorkflowResult> {
+  const token = decodeFavoriteContinuation(String(payload.continuationToken ?? ""));
+  if (
+    !token ||
+    token.comicId !== String(payload.comicId ?? "").trim() ||
+    token.action !== payload.action
+  ) {
+    return favoriteFailure(new Error("收藏工作流令牌无效或已过期"), false);
+  }
+  const input = payload.input ?? {};
+  if (input.cancelled) {
+    return {
+      status: "cancelled",
+      favorited: token.currentFavorite,
+      committed: false,
+      message: "用户取消了收藏操作",
+    };
+  }
+  try {
+    if (input.created) {
+      throw new Error("禁漫不支持新建收藏夹");
+    }
+    const folderId = String(input.value ?? "").trim();
+    if (!folderId || !token.folderIds.includes(folderId)) {
+      throw new Error("选择的收藏夹不存在或已失效");
+    }
+    const auth = readJmWorkflowAuth(toStringMap(payload.extern));
+    if (token.action === "add") {
+      await addJmFavorite(token.comicId, auth);
+    }
+    await moveJmFavorite(token.comicId, folderId, auth);
+    return { status: "completed", favorited: true, committed: true };
+  } catch (error) {
+    return { ...favoriteFailure(error), favorited: true };
+  }
+}
 
 function buildJmUserCover(photo: unknown, imageBase: string): string {
   const file = String(photo ?? "").trim();
@@ -3030,6 +3285,8 @@ export default {
   getCloudFavoriteData,
   getCommentFeed,
   toggleLike,
+  startFavoriteAction,
+  continueFavoriteAction,
   toggleFavorite,
   listFavoriteFolders,
   moveFavoriteToFolder,

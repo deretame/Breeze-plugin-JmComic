@@ -69,7 +69,11 @@ async function decryptDataField(
   for (const seed of Config.JM_SETTING_AES_SEEDS) {
     try {
       const key = await md5Hex(`${tsRaw}${seed}`);
-      const text = await hostRuntime.aesEcbPkcs7DecryptB64(payload, key);
+      const decrypted = await hostRuntime.crypto.aesEcbPkcs7Decrypt(
+        bytesFromBase64(payload),
+        key,
+      );
+      const text = bytesToUtf8(decrypted);
       if (!text.trim()) {
         continue;
       }
