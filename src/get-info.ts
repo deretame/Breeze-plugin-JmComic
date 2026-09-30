@@ -1,3 +1,5 @@
+import type { ComicListScene } from "breeze-plugin-kit";
+
 const JM_PLUGIN_ID = "bf99008d-010b-4f17-ac7c-61a9b57dc3d9";
 
 type Scene = Record<string, unknown>;
@@ -6,6 +8,26 @@ type BuildPluginInfoInput = {
   buildLatestScene: () => Scene;
   buildRankingScene: () => Scene;
 };
+
+export function buildJmCloudFavoriteScene(): ComicListScene {
+  return {
+    title: "云端收藏",
+    source: JM_PLUGIN_ID,
+    body: {
+      type: "pluginPagedComicList",
+      request: {
+        fnPath: "getCloudFavoriteData",
+        core: {},
+        extern: { source: "cloudFavorite", order: "mr", folderId: "" },
+      },
+    },
+    filter: {
+      fnPath: "getCloudFavoriteFilterBundle",
+      core: {},
+      extern: { source: "cloudFavorite" },
+    },
+  };
+}
 
 export function buildPluginInfo(input: BuildPluginInfoInput) {
   return {
@@ -56,8 +78,8 @@ export function buildPluginInfo(input: BuildPluginInfoInput) {
         id: "cloudFavorite",
         title: "云端收藏",
         action: {
-          type: "openCloudFavorite" as const,
-          payload: { title: "云端收藏" },
+          type: "openComicList" as const,
+          payload: { scene: buildJmCloudFavoriteScene() },
         },
       },
     ],

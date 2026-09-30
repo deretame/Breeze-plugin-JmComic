@@ -75,9 +75,31 @@
       "id": "cloudFavorite",
       "title": "云端收藏",
       "action": {
-        "type": "openCloudFavorite",
+        "type": "openComicList",
         "payload": {
-          "title": "云端收藏"
+          "scene": {
+            "title": "云端收藏",
+            "source": "bf99008d-010b-4f17-ac7c-61a9b57dc3d9",
+            "body": {
+              "type": "pluginPagedComicList",
+              "request": {
+                "fnPath": "getCloudFavoriteData",
+                "core": {},
+                "extern": {
+                  "source": "cloudFavorite",
+                  "order": "mr",
+                  "folderId": ""
+                }
+              }
+            },
+            "filter": {
+              "fnPath": "getCloudFavoriteFilterBundle",
+              "core": {},
+              "extern": {
+                "source": "cloudFavorite"
+              }
+            }
+          }
         }
       }
     }
