@@ -20,6 +20,8 @@ import type {
   ListFavoriteFoldersResult,
   MetadataListItem,
   OpenSearchAction,
+  LoginBundleContract,
+  LoginSubmitResult,
   RecommendItem,
   SettingsBundleContract,
   ToggleFavoriteResult,
@@ -27,12 +29,14 @@ import type {
   UserInfoBundleContract,
 } from "breeze-plugin-kit";
 import {
+  buildLoginBundle,
   flutterTools,
   hostRuntime,
   opencc,
   pluginConfig,
+  readLoginValues,
 } from "breeze-plugin-kit";
-import { createJmClient, setUnauthorizedSchemeProvider } from "./client";
+import { createJmClient } from "./client";
 import { Config } from "./constants";
 import {
   HOSTCFG_TIMEOUT_MS,
@@ -105,8 +109,7 @@ async function fetchImageBytes({ url = "", timeoutMs = 30000 } = {}) {
 
 async function jmRequest(input: RequestPayload) {
   const resolvedJwtToken =
-    String(input.jwtToken ?? "").trim() ||
-    String(await loadPluginSetting("auth.jwt", "")).trim();
+    String(input.jwtToken ?? "").trim() || String(await loadPluginSetting("auth.jwt", "")).trim();
   const { config, cacheEnabled } = await buildRequestConfig({
     ...input,
     jwtToken: resolvedJwtToken,
@@ -162,9 +165,7 @@ async function handleRequestError(
 }
 
 function isNetworkFailure(err: unknown): boolean {
-  const code = String(
-    (err as { code?: string } | null)?.code || "",
-  ).toUpperCase();
+  const code = String((err as { code?: string } | null)?.code || "").toUpperCase();
   if (
     code === "ECONNABORTED" ||
     code === "ERR_NETWORK" ||
@@ -174,9 +175,7 @@ function isNetworkFailure(err: unknown): boolean {
     return true;
   }
   // axios 超时无 code 时 message 兜底
-  const message = String(
-    (err as { message?: string } | null)?.message || "",
-  ).toLowerCase();
+  const message = String((err as { message?: string } | null)?.message || "").toLowerCase();
   return message.includes("timeout") || message.includes("network");
 }
 
@@ -310,15 +309,6 @@ type JmLoginPayload = {
   jwtToken?: string;
 };
 
-const JM_SEARCH_CATEGORY_OPTIONS = [
-  { label: "同人", value: "同人" },
-  { label: "单本", value: "单本" },
-  { label: "短篇", value: "短篇" },
-  { label: "其他类", value: "其他类" },
-  { label: "韩漫", value: "韩漫" },
-  { label: "English Manga", value: "English Manga" },
-];
-
 function toNum(value: unknown, fallback = 0): number {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -328,9 +318,7 @@ function toStrList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value
-    .map((item) => String(item ?? ""))
-    .filter((item) => item.trim().length > 0);
+  return value.map((item) => String(item ?? "")).filter((item) => item.trim().length > 0);
 }
 
 function toBool(value: unknown, fallback = false): boolean {
@@ -358,9 +346,7 @@ function formatDisplayTime(value: unknown): string {
     return "";
   }
 
-  const normalized = raw.includes("T")
-    ? raw
-    : raw.replace(" ", "T").replace(/\//g, "-");
+  const normalized = raw.includes("T") ? raw : raw.replace(" ", "T").replace(/\//g, "-");
   const date = new Date(normalized);
   if (Number.isNaN(date.getTime())) {
     return raw;
@@ -372,23 +358,6 @@ function formatDisplayTime(value: unknown): string {
   const hour = String(date.getHours()).padStart(2, "0");
   const minute = String(date.getMinutes()).padStart(2, "0");
   return `${year}-${month}-${day} ${hour}:${minute}`;
-}
-
-function buildMetadata(type: string, name: string, value: unknown) {
-  const list = Array.isArray(value) ? value : value == null ? [] : [value];
-  const normalized = list
-    .map((item) => String(item ?? "").trim())
-    .filter((item) => item.length > 0);
-
-  if (!normalized.length) {
-    return null;
-  }
-
-  return {
-    type,
-    name,
-    value: normalized,
-  };
 }
 
 function createActionItem(
@@ -446,9 +415,7 @@ function openSearchAction(payload: Record<string, unknown>): OpenSearchAction {
   const source = String(payload.source ?? "").trim();
   const keyword = String(payload.keyword ?? "").trim();
   const inheritedExtern =
-    payload.extern &&
-    typeof payload.extern === "object" &&
-    !Array.isArray(payload.extern)
+    payload.extern && typeof payload.extern === "object" && !Array.isArray(payload.extern)
       ? (payload.extern as Record<string, unknown>)
       : {};
   const extern = {
@@ -456,9 +423,7 @@ function openSearchAction(payload: Record<string, unknown>): OpenSearchAction {
     ...(typeof payload.url === "string" && payload.url.trim().length
       ? { url: payload.url.trim() }
       : {}),
-    ...(Array.isArray(payload.categories)
-      ? { categories: payload.categories }
-      : {}),
+    ...(Array.isArray(payload.categories) ? { categories: payload.categories } : {}),
     ...(typeof payload.mode === "string" && payload.mode.trim().length
       ? { mode: payload.mode.trim() }
       : {}),
@@ -523,15 +488,15 @@ function toComicItem(item: any, imageBase: string) {
       },
     },
     metadata: [
-      buildMetadata("author", "作者", item?.author),
-      buildMetadata("categories", "分类", [
+      createMetadataActionList("author", "作者", item?.author),
+      createMetadataActionList("categories", "分类", [
         item?.category?.title,
         item?.category_sub?.title,
       ]),
-      buildMetadata("tags", "标签", item?.tags),
-      buildMetadata("works", "作品", item?.works),
-      buildMetadata("actors", "角色", item?.actors),
-    ].filter(Boolean),
+      createMetadataActionList("tags", "标签", item?.tags),
+      createMetadataActionList("works", "作品", item?.works),
+      createMetadataActionList("actors", "角色", item?.actors),
+    ].filter((item): item is MetadataListItem => item != null),
     raw: {
       id,
       author: String(item?.author ?? ""),
@@ -543,12 +508,8 @@ function toComicItem(item: any, imageBase: string) {
         title: String(item?.category?.title ?? ""),
       },
       category_sub: {
-        id:
-          item?.category_sub?.id == null ? null : String(item.category_sub.id),
-        title:
-          item?.category_sub?.title == null
-            ? null
-            : String(item.category_sub.title),
+        id: item?.category_sub?.id == null ? null : String(item.category_sub.id),
+        title: item?.category_sub?.title == null ? null : String(item.category_sub.title),
       },
       liked: toBool(item?.liked),
       is_favorite: toBool(item?.is_favorite),
@@ -591,22 +552,6 @@ function toStringMap(value: unknown): Record<string, unknown> {
     return {};
   }
   return value as Record<string, unknown>;
-}
-
-function boolKeyList(value: unknown): string[] {
-  const map = toStringMap(value);
-  return Object.entries(map)
-    .filter(([, checked]) => Boolean(checked))
-    .map(([key]) => key);
-}
-
-function toBoolMap(values: string[]): Record<string, boolean> {
-  return values.reduce<Record<string, boolean>>((acc, item) => {
-    if (item.trim()) {
-      acc[item] = true;
-    }
-    return acc;
-  }, {});
 }
 
 function createChoiceOption(
@@ -707,31 +652,26 @@ function getJmRankingCategoryOptions(): RankingFilterOption[] {
         extern: { type: "hanman_chinese" },
       }),
     ]),
-    createChoiceOption(
-      "English Manga",
-      "meiman",
-      { extern: { type: "meiman" } },
-      [
-        createChoiceOption("IRODORI", "meiman_irodori", {
-          extern: { type: "meiman_irodori" },
-        }),
-        createChoiceOption("FAKKU", "meiman_fakku", {
-          extern: { type: "meiman_fakku" },
-        }),
-        createChoiceOption("18scan", "meiman_18scan", {
-          extern: { type: "meiman_18scan" },
-        }),
-        createChoiceOption("Manhwa", "meiman_manhwa", {
-          extern: { type: "meiman_manhwa" },
-        }),
-        createChoiceOption("Comic", "meiman_comic", {
-          extern: { type: "meiman_comic" },
-        }),
-        createChoiceOption("Other", "meiman_other", {
-          extern: { type: "meiman_other" },
-        }),
-      ],
-    ),
+    createChoiceOption("English Manga", "meiman", { extern: { type: "meiman" } }, [
+      createChoiceOption("IRODORI", "meiman_irodori", {
+        extern: { type: "meiman_irodori" },
+      }),
+      createChoiceOption("FAKKU", "meiman_fakku", {
+        extern: { type: "meiman_fakku" },
+      }),
+      createChoiceOption("18scan", "meiman_18scan", {
+        extern: { type: "meiman_18scan" },
+      }),
+      createChoiceOption("Manhwa", "meiman_manhwa", {
+        extern: { type: "meiman_manhwa" },
+      }),
+      createChoiceOption("Comic", "meiman_comic", {
+        extern: { type: "meiman_comic" },
+      }),
+      createChoiceOption("Other", "meiman_other", {
+        extern: { type: "meiman_other" },
+      }),
+    ]),
     createChoiceOption("Cosplay", "another_cosplay_direct", {
       extern: { type: "another_cosplay" },
     }),
@@ -851,9 +791,7 @@ async function normalizeHomeSectionTitle(value: unknown): Promise<string> {
     return "";
   }
 
-  const normalizedTitle = String(
-    await opencc.convert(title, "t2s.json"),
-  ).trim();
+  const normalizedTitle = String(await opencc.convert(title, "t2s.json")).trim();
   if (normalizedTitle !== "连载更新→右滑看更多→") {
     return normalizedTitle;
   }
@@ -877,19 +815,34 @@ async function loadPluginSetting(key: string, fallback: unknown) {
     if (decoded?.ok === true) {
       return decoded.value;
     }
-  } catch (_) {
+  } catch {
     // noop
   }
   return fallback;
 }
 
-async function loadBlockedCategories(): Promise<string[]> {
-  const value = await loadPluginSetting("search.blockedCategories", []);
-  return toStrList(value);
+/**
+ * 旧宿主（< 3.0.34，不懂 getLoginBundle）走 settings 账号密码区登录。
+ * 三段比较：4.0.0 > 3.0.34，缺段按 0 补齐。
+ */
+function compareVersions(a: string, b: string): number {
+  const pa = String(a ?? "")
+    .split(".")
+    .map((x) => Number(x) || 0);
+  const pb = String(b ?? "")
+    .split(".")
+    .map((x) => Number(x) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i += 1) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
 }
 
-async function saveBlockedCategories(values: string[]) {
-  await pluginConfig.save("search.blockedCategories", JSON.stringify(values));
+async function isLegacyHost(): Promise<boolean> {
+  const version = await flutterTools.getAppVersion();
+  return compareVersions(version, "3.0.34") < 0;
 }
 
 async function getSettingsBundle(): Promise<SettingsBundleContract> {
@@ -897,29 +850,35 @@ async function getSettingsBundle(): Promise<SettingsBundleContract> {
     loadPluginSetting("auth.account", ""),
     loadPluginSetting("auth.password", ""),
   ]);
+  const legacyHost = await isLegacyHost();
 
   return {
     source: JM_PLUGIN_ID,
     scheme: {
       version: "1.0.0",
       type: "settings",
-      sections: [
-        {
-          id: "account",
-          title: "账号",
-          fields: [
-            { key: "auth.account", kind: "text", label: "用户名" },
-            { key: "auth.password", kind: "password", label: "密码" },
-          ],
-        },
-      ],
+      sections: legacyHost
+        ? [
+            {
+              id: "account",
+              title: "账号",
+              fields: [
+                { key: "auth.account", kind: "text", label: "用户名" },
+                { key: "auth.password", kind: "password", label: "密码" },
+              ],
+            },
+          ]
+        : [],
     },
     data: {
       canShowUserInfo: true,
-      values: {
-        "auth.account": String(account ?? ""),
-        "auth.password": String(password ?? ""),
-      },
+      values: legacyHost
+        ? {
+            "auth.account": String(account ?? ""),
+            "auth.password": String(password ?? ""),
+          }
+        : {},
+      canLogin: true,
     },
   };
 }
@@ -936,9 +895,7 @@ async function getUserInfoBundle(): Promise<UserInfoBundleContract> {
     }
 
     const account = String(await loadPluginSetting("auth.account", "")).trim();
-    const password = String(
-      await loadPluginSetting("auth.password", ""),
-    ).trim();
+    const password = String(await loadPluginSetting("auth.password", "")).trim();
     if (!account || !password) {
       return current;
     }
@@ -952,10 +909,7 @@ async function getUserInfoBundle(): Promise<UserInfoBundleContract> {
     })) as Record<string, any>;
     await Promise.all([
       pluginConfig.save("auth.userInfo", JSON.stringify(refreshed)),
-      pluginConfig.save(
-        "auth.jwt",
-        JSON.stringify(String(refreshed?.jwttoken ?? "")),
-      ),
+      pluginConfig.save("auth.jwt", JSON.stringify(String(refreshed?.jwttoken ?? ""))),
     ]);
     return refreshed;
   };
@@ -1003,43 +957,44 @@ async function getUserInfoBundle(): Promise<UserInfoBundleContract> {
   };
 }
 
-async function getLoginBundle() {
+async function getLoginBundle(): Promise<LoginBundleContract> {
+  const account = String(await loadPluginSetting("auth.account", ""));
+  const password = String(await loadPluginSetting("auth.password", ""));
+  return buildLoginBundle(JM_PLUGIN_ID, {
+    title: "禁漫登录",
+    fields: [
+      { key: "account", kind: "text", label: "用户名" },
+      { key: "password", kind: "password", label: "密码" },
+    ],
+    submitFnPath: "loginWithPassword",
+    submitText: "登录",
+    values: { account, password },
+  });
+}
+
+function readLoginFormValues(payload: JmLoginPayload = {}) {
+  const record = payload as Record<string, unknown>;
+  if (record.values !== undefined) {
+    const kitValues = readLoginValues(payload);
+    return {
+      account: (kitValues.account ?? "").trim(),
+      password: kitValues.password ?? "",
+    };
+  }
   return {
-    source: JM_PLUGIN_ID,
-    scheme: {
-      version: "1.0.0",
-      type: "login",
-      title: "禁漫登录",
-      fields: [
-        { key: "account", kind: "text", label: "用户名" },
-        { key: "password", kind: "password", label: "密码" },
-      ],
-      action: {
-        fnPath: "loginWithPassword",
-        submitText: "登录",
-      },
-    },
-    data: {
-      account: String(await loadPluginSetting("auth.account", "")),
-      password: String(await loadPluginSetting("auth.password", "")),
-    },
+    account: String(record.account ?? "").trim(),
+    password: String(record.password ?? ""),
   };
 }
 
-setUnauthorizedSchemeProvider(async () => {
-  const bundle = await getLoginBundle();
-  return bundle as Record<string, unknown>;
-});
-
-async function loginWithPassword(payload: JmLoginPayload = {}) {
-  const account = String(payload.account ?? "").trim();
-  const password = String(payload.password ?? "");
+async function loginWithPassword(payload: JmLoginPayload = {}): Promise<LoginSubmitResult> {
+  const { account, password } = readLoginFormValues(payload);
   if (!account || !password) {
     throw new Error("账号或密码不能为空");
   }
 
   const path = `${await getApiBaseUrl()}/login`;
-  let result: any;
+  let result: unknown;
   try {
     result = await jmRequest({
       path,
@@ -1054,7 +1009,8 @@ async function loginWithPassword(payload: JmLoginPayload = {}) {
     throw error;
   }
 
-  const jwtToken = String((result as any)?.jwttoken ?? "");
+  const body = (result ?? {}) as Record<string, unknown>;
+  const jwtToken = String(body.jwttoken ?? "");
   await Promise.all([
     pluginConfig.save("auth.account", JSON.stringify(account)),
     pluginConfig.save("auth.password", JSON.stringify(password)),
@@ -1064,12 +1020,13 @@ async function loginWithPassword(payload: JmLoginPayload = {}) {
 
   return {
     source: JM_PLUGIN_ID,
+    message: "登录成功",
     data: {
       account,
       password,
       jwtToken,
     },
-    raw: result,
+    raw: result as Record<string, unknown>,
   };
 }
 
@@ -1122,10 +1079,7 @@ async function loadHostPool(): Promise<string[]> {
   }
   const normalized = fulfilled.value.text.replace(/[^A-Za-z0-9+/=]/g, "");
   const key = await md5Hex(Config.JM_HOSTCFG_AES_SEED);
-  const decrypted = await hostRuntime.crypto.aesEcbPkcs7Decrypt(
-    bytesFromBase64(normalized),
-    key,
-  );
+  const decrypted = await hostRuntime.crypto.aesEcbPkcs7Decrypt(bytesFromBase64(normalized), key);
   const plain = new TextDecoder("utf-8").decode(decrypted);
   const parsed = JSON.parse(String(plain || "{}")) as { Server?: unknown };
   if (!Array.isArray(parsed.Server)) {
@@ -1148,10 +1102,7 @@ async function resolveOrderedPool(hostPool: string[]) {
  * 图床选优: 从各线路 setting 解出的 img_host 去重, 逐个打轻量探针排序.
  * setting 无 img_host 时回退 fallback, 保证图床恒有值.
  */
-async function resolveImagePool(
-  probes: EndpointProbe[],
-  fallback: string,
-): Promise<string[]> {
+async function resolveImagePool(probes: EndpointProbe[], fallback: string): Promise<string[]> {
   const candidates = Array.from(
     new Set(
       probes
@@ -1165,15 +1116,12 @@ async function resolveImagePool(
   }
   const results: ImageProbe[] = [];
   const queue = [...candidates];
-  const workers = Array.from(
-    { length: Math.min(PROBE_CONCURRENCY, queue.length) },
-    async () => {
-      while (queue.length > 0) {
-        const candidate = queue.shift()!;
-        results.push(await probeImageHost(candidate, PROBE_TIMEOUT_MS));
-      }
-    },
-  );
+  const workers = Array.from({ length: Math.min(PROBE_CONCURRENCY, queue.length) }, async () => {
+    while (queue.length > 0) {
+      const candidate = queue.shift()!;
+      results.push(await probeImageHost(candidate, PROBE_TIMEOUT_MS));
+    }
+  });
   await Promise.all(workers);
   lastImageProbes = results;
   const ordered = orderImagePool(results);
@@ -1186,9 +1134,7 @@ async function applyOrderedPool(
   hostPool: string[],
 ): Promise<string> {
   const pool =
-    ordered.length > 0
-      ? ordered
-      : [ordered[0] ?? hostPool[0] ?? Config.JM_FALLBACK_API_BASE];
+    ordered.length > 0 ? ordered : [ordered[0] ?? hostPool[0] ?? Config.JM_FALLBACK_API_BASE];
   const apiBaseUrl = pool[0]!;
   const image = imagePool[0] ?? Config.JM_FALLBACK_IMAGE_BASE;
   await setRuntimeEndpointCache({
@@ -1286,7 +1232,7 @@ async function tryJmCheckin() {
             message: "禁漫自动签到成功！",
             level: "success",
           });
-        } catch (_) {}
+        } catch {}
       }
 
       return true;
@@ -1312,9 +1258,7 @@ async function runJmAuthAndCheckInLoop() {
   try {
     while (true) {
       try {
-        const account = String(
-          await loadPluginSetting("auth.account", ""),
-        ).trim();
+        const account = String(await loadPluginSetting("auth.account", "")).trim();
         const password = String(await loadPluginSetting("auth.password", ""));
 
         if (!account || !password) {
@@ -1339,10 +1283,7 @@ async function runJmAuthAndCheckInLoop() {
         return;
       } catch (error) {
         const delay = randomRetryDelayMs();
-        console.warn(
-          `[jm.init] login/checkin failed, retry in ${delay}ms`,
-          error,
-        );
+        console.warn(`[jm.init] login/checkin failed, retry in ${delay}ms`, error);
         await waitMs(delay);
       }
     }
@@ -1401,16 +1342,6 @@ function buildJmRankingScene() {
     filter: {
       fnPath: "getRankingFilterBundle",
       extern: { source: "ranking" },
-    },
-  });
-}
-
-function buildJmRecommendScene() {
-  return buildComicListScene({
-    title: "推荐",
-    list: {
-      fnPath: "getRecommendData",
-      extern: { source: "recommend" },
     },
   });
 }
@@ -1787,9 +1718,7 @@ function timestampToIso(value: unknown): string {
   return new Date(seconds * 1000).toISOString();
 }
 
-async function getComicDetail(
-  payload: ComicDetailPayload = {},
-): Promise<ComicDetailContract> {
+async function getComicDetail(payload: ComicDetailPayload = {}): Promise<ComicDetailContract> {
   const comicId = String(payload.comicId ?? "").trim();
   if (!comicId) {
     throw new Error("comicId 不能为空");
@@ -1820,9 +1749,7 @@ async function getComicDetail(
     tags: toStrList(response.tags),
     works: toStrList(response.works),
     actors: toStrList(response.actors),
-    related_list: Array.isArray(response.related_list)
-      ? response.related_list
-      : [],
+    related_list: Array.isArray(response.related_list) ? response.related_list : [],
     liked: toBool(response.liked),
     is_favorite: toBool(response.is_favorite),
     is_aids: toBool(response.is_aids),
@@ -1863,41 +1790,17 @@ async function getComicDetail(
         extern: {},
       }),
       metadata: [
-        createMetadataActionList(
-          "author",
-          "作者",
-          normalizedInfo.author,
-          (item) =>
-            createActionItem(
-              item,
-              openSearchAction({ source: JM_PLUGIN_ID, keyword: item }),
-            ),
+        createMetadataActionList("author", "作者", normalizedInfo.author, (item) =>
+          createActionItem(item, openSearchAction({ source: JM_PLUGIN_ID, keyword: item })),
         ),
         createMetadataActionList("tags", "标签", normalizedInfo.tags, (item) =>
-          createActionItem(
-            item,
-            openSearchAction({ source: JM_PLUGIN_ID, keyword: item }),
-          ),
+          createActionItem(item, openSearchAction({ source: JM_PLUGIN_ID, keyword: item })),
         ),
-        createMetadataActionList(
-          "works",
-          "作品",
-          normalizedInfo.works,
-          (item) =>
-            createActionItem(
-              item,
-              openSearchAction({ source: JM_PLUGIN_ID, keyword: item }),
-            ),
+        createMetadataActionList("works", "作品", normalizedInfo.works, (item) =>
+          createActionItem(item, openSearchAction({ source: JM_PLUGIN_ID, keyword: item })),
         ),
-        createMetadataActionList(
-          "actors",
-          "角色",
-          normalizedInfo.actors,
-          (item) =>
-            createActionItem(
-              item,
-              openSearchAction({ source: JM_PLUGIN_ID, keyword: item }),
-            ),
+        createMetadataActionList("actors", "角色", normalizedInfo.actors, (item) =>
+          createActionItem(item, openSearchAction({ source: JM_PLUGIN_ID, keyword: item })),
         ),
       ].filter((item): item is NonNullable<typeof item> => item != null),
       extern: {},
@@ -1933,42 +1836,28 @@ async function getComicDetail(
         },
       ];
     })(),
-    recommend: (normalizedInfo.related_list as any[]).map(
-      (item: any): RecommendItem => {
-        const unifiedItem = toComicItem(item, imageBase);
-        return {
-          source: JM_PLUGIN_ID,
+    recommend: (normalizedInfo.related_list as any[]).map((item: any): RecommendItem => {
+      const unifiedItem = toComicItem(item, imageBase);
+      return {
+        source: JM_PLUGIN_ID,
+        id: unifiedItem.id,
+        title: unifiedItem.title,
+        subtitle: unifiedItem.subtitle,
+        finished: unifiedItem.finished,
+        likesCount: unifiedItem.likesCount,
+        viewsCount: unifiedItem.viewsCount,
+        updatedAt: unifiedItem.updatedAt,
+        cover: createImage({
           id: unifiedItem.id,
-          title: unifiedItem.title,
-          subtitle: unifiedItem.subtitle,
-          finished: unifiedItem.finished,
-          likesCount: unifiedItem.likesCount,
-          viewsCount: unifiedItem.viewsCount,
-          updatedAt: unifiedItem.updatedAt,
-          cover: createImage({
-            id: unifiedItem.id,
-            url: resolveJmCoverUrl(item, imageBase),
-            path: `${unifiedItem.id}.jpg`,
-            extern: {},
-          }),
-          metadata: [item?.author, item?.tags, item?.works, item?.actors]
-            .flatMap((value: unknown) =>
-              Array.isArray(value) ? value : value == null ? [] : [value],
-            )
-            .map((value) => String(value ?? "").trim())
-            .filter((value) => value.length > 0)
-            .slice(0, 6)
-            .map((value) =>
-              createActionItem(
-                value,
-                openSearchAction({ source: JM_PLUGIN_ID, keyword: value }),
-              ),
-            ),
-          raw: unifiedItem.raw,
+          url: resolveJmCoverUrl(item, imageBase),
+          path: `${unifiedItem.id}.jpg`,
           extern: {},
-        };
-      },
-    ),
+        }),
+        metadata: unifiedItem.metadata,
+        raw: unifiedItem.raw,
+        extern: {},
+      };
+    }),
     totalViews: toNum(normalizedInfo.total_views),
     totalLikes: toNum(normalizedInfo.likes),
     totalComments: toNum(normalizedInfo.comment_total),
@@ -2011,8 +1900,7 @@ async function searchComic(payload: JmSearchPayload = {}) {
   const keywordLower = keyword.toLowerCase();
   const order = String(extern.sort ?? sortByToOrder(extern.sortBy)).trim();
   const path =
-    String(payload.path ?? extern.path ?? "").trim() ||
-    `${await getApiBaseUrl()}/search`;
+    String(payload.path ?? extern.path ?? "").trim() || `${await getApiBaseUrl()}/search`;
   const searchPageSize = 80;
   const buildResult = (content: any[], total: number) => {
     const scheme = {
@@ -2049,9 +1937,7 @@ async function searchComic(payload: JmSearchPayload = {}) {
   };
 
   if ((Number(keyword) >= 100 || keywordLower.startsWith("jm")) && page === 1) {
-    const comicId = keywordLower.startsWith("jm")
-      ? keyword.slice(2).trim()
-      : keyword;
+    const comicId = keywordLower.startsWith("jm") ? keyword.slice(2).trim() : keyword;
     if (comicId) {
       try {
         const detailResponse = await getComicDetail({
@@ -2059,8 +1945,9 @@ async function searchComic(payload: JmSearchPayload = {}) {
           useJwt: payload.useJwt,
           jwtToken: payload.jwtToken,
         });
-        const comicInfo = (detailResponse?.data?.raw as Record<string, any>)
-          ?.comicInfo as Record<string, any> | undefined;
+        const comicInfo = (detailResponse?.data?.raw as Record<string, any>)?.comicInfo as
+          | Record<string, any>
+          | undefined;
         if (comicInfo?.id) {
           return buildResult(
             [
@@ -2076,7 +1963,7 @@ async function searchComic(payload: JmSearchPayload = {}) {
             1,
           );
         }
-      } catch (_error) {
+      } catch {
         // ignore direct-id fallback failure and continue with normal search
       }
     }
@@ -2234,8 +2121,8 @@ async function getHomeRecommendData(payload: JmHomePayload = {}) {
         direction: "horizontal",
         key: "items",
       },
-      items: (Array.isArray(section?.content) ? section.content : []).map(
-        (item: any) => toComicItem(item, imageBase),
+      items: (Array.isArray(section?.content) ? section.content : []).map((item: any) =>
+        toComicItem(item, imageBase),
       ),
       raw: section,
     }));
@@ -2258,8 +2145,7 @@ async function getHomeLatestData(payload: JmHomePayload = {}) {
   const extern = toStringMap(payload.extern);
   const page = Number.isFinite(Number(payload.page)) ? Number(payload.page) : 0;
   const path =
-    String(payload.path ?? extern.suggestionPath ?? "").trim() ||
-    `${await getApiBaseUrl()}/latest`;
+    String(payload.path ?? extern.suggestionPath ?? "").trim() || `${await getApiBaseUrl()}/latest`;
   const suggestion = await jmRequest({
     path,
     method: "GET",
@@ -2270,8 +2156,8 @@ async function getHomeLatestData(payload: JmHomePayload = {}) {
   });
 
   const imageBase = await getImageBaseUrl();
-  const suggestionItems = (Array.isArray(suggestion) ? suggestion : []).map(
-    (item: any) => toComicItem(item, imageBase),
+  const suggestionItems = (Array.isArray(suggestion) ? suggestion : []).map((item: any) =>
+    toComicItem(item, imageBase),
   );
 
   return {
@@ -2308,14 +2194,10 @@ async function getRankingData(payload: JmRankingPayload = {}) {
   });
 
   const total = toNum((raw as any)?.total, 0);
-  const content = Array.isArray((raw as any)?.content)
-    ? (raw as any).content
-    : [];
+  const content = Array.isArray((raw as any)?.content) ? (raw as any).content : [];
   const loadedCount = Math.max(0, page - 1) * rankingPageSize + content.length;
   const hasReachedMax =
-    content.length === 0 ||
-    content.length < rankingPageSize ||
-    (total > 0 && loadedCount >= total);
+    content.length === 0 || content.length < rankingPageSize || (total > 0 && loadedCount >= total);
 
   return {
     source: JM_PLUGIN_ID,
@@ -2356,9 +2238,7 @@ async function getPromoteListData(payload: JmPromoteListPayload = {}) {
   const list = Array.isArray(raw.list) ? raw.list : [];
   const loadedCount = Math.max(0, page - 1) * pageSize + list.length;
   const hasReachedMax =
-    list.length === 0 ||
-    list.length < pageSize ||
-    (total > 0 && loadedCount >= total);
+    list.length === 0 || list.length < pageSize || (total > 0 && loadedCount >= total);
 
   return {
     source: JM_PLUGIN_ID,
@@ -2480,9 +2360,7 @@ async function getCloudFavoriteData(payload: JmCloudFavoritePayload = {}) {
   };
 }
 
-async function toggleLike(
-  payload: JmLikePayload = {},
-): Promise<ToggleLikeResult> {
+async function toggleLike(payload: JmLikePayload = {}): Promise<ToggleLikeResult> {
   const comicId = String(payload.comicId ?? "").trim();
   if (!comicId) {
     throw new Error("comicId 不能为空");
@@ -2608,10 +2486,7 @@ type JmFavoriteContinuation = {
 
 type JmFavoriteFolder = { id: string; name: string };
 
-function favoriteFailure(
-  error: unknown,
-  currentFavorite = false,
-): FavoriteWorkflowResult {
+function favoriteFailure(error: unknown, currentFavorite = false): FavoriteWorkflowResult {
   return {
     status: "failed",
     favorited: currentFavorite,
@@ -2622,14 +2497,10 @@ function favoriteFailure(
 }
 
 function encodeFavoriteContinuation(value: JmFavoriteContinuation): string {
-  return `${JM_FAVORITE_CONTINUATION_PREFIX}${encodeURIComponent(
-    JSON.stringify(value),
-  )}`;
+  return `${JM_FAVORITE_CONTINUATION_PREFIX}${encodeURIComponent(JSON.stringify(value))}`;
 }
 
-function decodeFavoriteContinuation(
-  value: string,
-): JmFavoriteContinuation | null {
+function decodeFavoriteContinuation(value: string): JmFavoriteContinuation | null {
   const raw = String(value ?? "");
   if (!raw.startsWith(JM_FAVORITE_CONTINUATION_PREFIX)) {
     return null;
@@ -2640,9 +2511,7 @@ function decodeFavoriteContinuation(
     ) as Partial<JmFavoriteContinuation>;
     const comicId = String(parsed.comicId ?? "").trim();
     const folderIds = Array.isArray(parsed.folderIds)
-      ? parsed.folderIds
-          .map((item) => String(item ?? "").trim())
-          .filter((item) => item.length > 0)
+      ? parsed.folderIds.map((item) => String(item ?? "").trim()).filter((item) => item.length > 0)
       : [];
     const createdAt = Number(parsed.createdAt ?? 0);
     if (
@@ -2670,19 +2539,13 @@ type JmWorkflowAuth = { useJwt?: boolean; jwtToken?: string };
 
 function readJmWorkflowAuth(extern: Record<string, unknown>): JmWorkflowAuth {
   const useJwt =
-    "useJwt" in extern && typeof extern.useJwt === "boolean"
-      ? extern.useJwt
-      : undefined;
+    "useJwt" in extern && typeof extern.useJwt === "boolean" ? extern.useJwt : undefined;
   const jwtToken =
-    "jwtToken" in extern && typeof extern.jwtToken === "string"
-      ? extern.jwtToken
-      : undefined;
+    "jwtToken" in extern && typeof extern.jwtToken === "string" ? extern.jwtToken : undefined;
   return { useJwt, jwtToken };
 }
 
-async function fetchJmFavoriteFolders(
-  input: JmWorkflowAuth,
-): Promise<JmFavoriteFolder[]> {
+async function fetchJmFavoriteFolders(input: JmWorkflowAuth): Promise<JmFavoriteFolder[]> {
   const raw = await jmRequest({
     path: `${await getApiBaseUrl()}/favorite`,
     method: "GET",
@@ -2691,8 +2554,7 @@ async function fetchJmFavoriteFolders(
     useJwt: input.useJwt ?? true,
     jwtToken: input.jwtToken,
   });
-  const folderList =
-    raw && typeof raw === "object" && "folder_list" in raw ? raw.folder_list : [];
+  const folderList = raw && typeof raw === "object" && "folder_list" in raw ? raw.folder_list : [];
   const folders = Array.isArray(folderList) ? folderList : [];
   return folders
     .map((item) => {
@@ -2705,10 +2567,7 @@ async function fetchJmFavoriteFolders(
     .filter((item) => item.id.length > 0);
 }
 
-async function addJmFavorite(
-  comicId: string,
-  input: JmWorkflowAuth,
-): Promise<void> {
+async function addJmFavorite(comicId: string, input: JmWorkflowAuth): Promise<void> {
   const res = await jmRequest({
     path: `${await getApiBaseUrl()}/favorite`,
     method: "POST",
@@ -2772,14 +2631,9 @@ async function startFavoriteAction(
   }
   if (action === "add" || action === "move") {
     try {
-      const folders = await fetchJmFavoriteFolders(
-        readJmWorkflowAuth(toStringMap(payload.extern)),
-      );
+      const folders = await fetchJmFavoriteFolders(readJmWorkflowAuth(toStringMap(payload.extern)));
       if (folders.length === 0) {
-        return favoriteFailure(
-          new Error("未能获取收藏夹列表"),
-          action === "move",
-        );
+        return favoriteFailure(new Error("未能获取收藏夹列表"), action === "move");
       }
       return {
         status: "awaitingInput",
@@ -2907,9 +2761,7 @@ function mapJmCommentItem(item: any, imageBase: string) {
   };
 }
 
-async function getCommentFeed(
-  payload: JmCommentFeedPayload = {},
-): Promise<CommentFeedContract> {
+async function getCommentFeed(payload: JmCommentFeedPayload = {}): Promise<CommentFeedContract> {
   const comicId = String(payload.comicId ?? "").trim();
   const page = Math.max(1, toNum(payload.page, 1));
   if (!comicId) {
@@ -3038,9 +2890,7 @@ async function getChapter(payload: JmChapterPayload = {}) {
   const docs = images.map((image) => ({
     name: String(image ?? ""),
     path: String(image ?? ""),
-    url: imageBase
-      ? `${imageBase}/media/photos/${chapterId}/${String(image ?? "")}`
-      : "",
+    url: imageBase ? `${imageBase}/media/photos/${chapterId}/${String(image ?? "")}` : "",
     id: String(image ?? ""),
   }));
 
@@ -3096,9 +2946,7 @@ async function getReadSnapshot(payload: JmReadSnapshotPayload = {}) {
   const externInput = toStringMap(payload.extern);
   const detailPath = String(externInput.path ?? "").trim();
   const detailUseJwt =
-    externInput.useJwt === undefined
-      ? undefined
-      : toBool(externInput.useJwt, true);
+    externInput.useJwt === undefined ? undefined : toBool(externInput.useJwt, true);
   const detailJwtToken = String(externInput.jwtToken ?? "").trim();
 
   const detail = await getComicDetail({
@@ -3110,31 +2958,27 @@ async function getReadSnapshot(payload: JmReadSnapshotPayload = {}) {
   });
   const normal = (detail as any)?.data?.normal ?? (detail as any)?.normal ?? {};
 
-  const chapterRefs = (Array.isArray(normal?.eps) ? normal.eps : []).map(
-    (ep: any) => {
-      const id = String(ep?.id ?? "");
-      const order = toNum(ep?.order, 0);
-      return {
-        id,
-        requestId: String(ep?.requestId ?? id),
-        logicalKey: String(ep?.logicalKey ?? id),
-        storageChapterId: String(ep?.storageChapterId ?? id),
-        name: String(ep?.name ?? ""),
-        order,
-        extern: {
-          sort: toNum(ep?.extern?.sort, order),
-          ...toStringMap(ep?.extern),
-        },
-      };
-    },
-  );
+  const chapterRefs = (Array.isArray(normal?.eps) ? normal.eps : []).map((ep: any) => {
+    const id = String(ep?.id ?? "");
+    const order = toNum(ep?.order, 0);
+    return {
+      id,
+      requestId: String(ep?.requestId ?? id),
+      logicalKey: String(ep?.logicalKey ?? id),
+      storageChapterId: String(ep?.storageChapterId ?? id),
+      name: String(ep?.name ?? ""),
+      order,
+      extern: {
+        sort: toNum(ep?.extern?.sort, order),
+        ...toStringMap(ep?.extern),
+      },
+    };
+  });
 
   let chapterId = String(payload.chapterId ?? "").trim();
   const order = toNum(externInput.order, 0);
   if (!chapterId && order > 0) {
-    const found = chapterRefs.find(
-      (item: any) => toNum(item?.order, 0) === order,
-    );
+    const found = chapterRefs.find((item: any) => toNum(item?.order, 0) === order);
     chapterId = String(found?.id ?? "").trim();
   }
   if (!chapterId) {
@@ -3153,12 +2997,8 @@ async function getReadSnapshot(payload: JmReadSnapshotPayload = {}) {
     jwtToken: detailJwtToken || undefined,
   });
   const chapterData =
-    (chapterBundle as any)?.data?.chapter ??
-    (chapterBundle as any)?.chapter ??
-    {};
-  const pages = (
-    Array.isArray(chapterData?.pages) ? chapterData.pages : []
-  ).map((doc: any) => ({
+    (chapterBundle as any)?.data?.chapter ?? (chapterBundle as any)?.chapter ?? {};
+  const pages = (Array.isArray(chapterData?.pages) ? chapterData.pages : []).map((doc: any) => ({
     id: String(doc?.id ?? ""),
     name: String(doc?.name ?? doc?.originalName ?? ""),
     path: String(doc?.path ?? ""),
@@ -3166,18 +3006,12 @@ async function getReadSnapshot(payload: JmReadSnapshotPayload = {}) {
     extern: toStringMap(doc?.extern),
   }));
 
-  const currentChapter = chapterRefs.find(
-    (item: any) => String(item.id) === String(chapterId),
-  ) ??
+  const currentChapter = chapterRefs.find((item: any) => String(item.id) === String(chapterId)) ??
     chapterRefs.find((item: any) => toNum(item?.order, 0) === order) ?? {
       id: String(chapterData?.id ?? chapterId),
       requestId: String(chapterData?.requestId ?? chapterData?.id ?? chapterId),
-      logicalKey: String(
-        chapterData?.logicalKey ?? chapterData?.id ?? chapterId,
-      ),
-      storageChapterId: String(
-        chapterData?.storageChapterId ?? chapterData?.id ?? chapterId,
-      ),
+      logicalKey: String(chapterData?.logicalKey ?? chapterData?.id ?? chapterId),
+      storageChapterId: String(chapterData?.storageChapterId ?? chapterData?.id ?? chapterId),
       name: String(chapterData?.name ?? ""),
       order: order > 0 ? order : 1,
       extern: {},
@@ -3195,57 +3029,45 @@ async function getReadSnapshot(payload: JmReadSnapshotPayload = {}) {
         title: String(comicInfo?.title ?? ""),
         description: String(comicInfo?.description ?? ""),
         cover: {
-          ...(comicInfo?.cover ?? {}),
+          ...comicInfo?.cover,
           extern: toStringMap(comicInfo?.cover?.extern),
         },
         creator: {
-          ...(comicInfo?.creator ?? {}),
+          ...comicInfo?.creator,
           avatar: {
-            ...(comicInfo?.creator?.avatar ?? {}),
+            ...comicInfo?.creator?.avatar,
             extern: toStringMap(comicInfo?.creator?.avatar?.extern),
           },
           extern: toStringMap(comicInfo?.creator?.extern),
         },
-        titleMeta: (Array.isArray(comicInfo?.titleMeta)
-          ? comicInfo.titleMeta
-          : []
-        ).map((item: any) => ({
-          name: String(item?.name ?? ""),
-          onTap: toStringMap(item?.onTap),
-          extern: toStringMap(item?.extern),
-        })),
-        metadata: (Array.isArray(comicInfo?.metadata)
-          ? comicInfo.metadata
-          : []
-        ).map((meta: any) => ({
-          type: String(meta?.type ?? ""),
-          name: String(meta?.name ?? ""),
-          value: (Array.isArray(meta?.value) ? meta.value : []).map(
-            (item: any) => ({
+        titleMeta: (Array.isArray(comicInfo?.titleMeta) ? comicInfo.titleMeta : []).map(
+          (item: any) => ({
+            name: String(item?.name ?? ""),
+            onTap: toStringMap(item?.onTap),
+            extern: toStringMap(item?.extern),
+          }),
+        ),
+        metadata: (Array.isArray(comicInfo?.metadata) ? comicInfo.metadata : []).map(
+          (meta: any) => ({
+            type: String(meta?.type ?? ""),
+            name: String(meta?.name ?? ""),
+            value: (Array.isArray(meta?.value) ? meta.value : []).map((item: any) => ({
               name: String(item?.name ?? ""),
               onTap: toStringMap(item?.onTap),
               extern: toStringMap(item?.extern),
-            }),
-          ),
-        })),
+            })),
+          }),
+        ),
         extern: toStringMap(comicInfo?.extern),
       },
       chapter: {
         id: String(chapterData?.id ?? currentChapter.id),
-        requestId: String(
-          chapterData?.requestId ??
-            currentChapter.requestId ??
-            currentChapter.id,
-        ),
+        requestId: String(chapterData?.requestId ?? currentChapter.requestId ?? currentChapter.id),
         logicalKey: String(
-          chapterData?.logicalKey ??
-            currentChapter.logicalKey ??
-            currentChapter.id,
+          chapterData?.logicalKey ?? currentChapter.logicalKey ?? currentChapter.id,
         ),
         storageChapterId: String(
-          chapterData?.storageChapterId ??
-            currentChapter.storageChapterId ??
-            currentChapter.id,
+          chapterData?.storageChapterId ?? currentChapter.storageChapterId ?? currentChapter.id,
         ),
         name: String(chapterData?.name ?? currentChapter.name),
         order: toNum(currentChapter.order, 0),

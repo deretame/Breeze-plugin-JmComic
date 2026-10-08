@@ -25,8 +25,7 @@ export async function buildRequestConfig(input: RequestPayload): Promise<BuiltRe
     body = toQueryString(input.formData);
     headers["content-type"] = "application/x-www-form-urlencoded";
   } else if (method === "POST" && typeof body === "string") {
-    headers["content-type"] =
-      headers["content-type"] || "application/x-www-form-urlencoded";
+    headers["content-type"] = headers["content-type"] || "application/x-www-form-urlencoded";
   }
 
   const cacheEnabled = input.cache === true;

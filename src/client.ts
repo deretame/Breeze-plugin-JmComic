@@ -1,5 +1,6 @@
 import type { AxiosResponse } from "axios";
 import axios from "axios";
+import { buildUnauthorizedError } from "breeze-plugin-kit";
 import { decodeResponsePayload } from "./codec";
 import { Config } from "./constants";
 import { resolveServerMessage, toFriendlyError } from "./errors";
@@ -13,45 +14,7 @@ import {
 import type { JmMeta, JmRequestConfig } from "./types";
 import { getHost, md5Hex, nowTs } from "./utils";
 
-type UnauthorizedErrorPayload = {
-  type: "unauthorized";
-  source: string;
-  message: string;
-  scheme?: Record<string, unknown>;
-  data?: Record<string, unknown>;
-};
-
 const JM_PLUGIN_ID = "bf99008d-010b-4f17-ac7c-61a9b57dc3d9";
-
-let unauthorizedSchemeProvider:
-  | (() => Promise<Record<string, unknown> | undefined>)
-  | null = null;
-
-export function setUnauthorizedSchemeProvider(
-  provider: () => Promise<Record<string, unknown> | undefined>,
-) {
-  unauthorizedSchemeProvider = provider;
-}
-
-async function buildUnauthorizedError(
-  message = "登录过期，请重新登录",
-): Promise<Error> {
-  const payload: UnauthorizedErrorPayload = {
-    type: "unauthorized",
-    source: JM_PLUGIN_ID,
-    message,
-  };
-  try {
-    const bundle = await unauthorizedSchemeProvider?.();
-    if (bundle && typeof bundle === "object") {
-      payload.scheme = (bundle.scheme as Record<string, unknown>) ?? undefined;
-      payload.data = (bundle.data as Record<string, unknown>) ?? undefined;
-    }
-  } catch (_) {
-    // ignore scheme build errors
-  }
-  return new Error(JSON.stringify(payload));
-}
 
 function isLoginRequest(url: unknown): boolean {
   return String(url || "")
@@ -78,26 +41,16 @@ export function createJmClient() {
     validateStatus: () => true,
   });
 
-  async function parseResponse(
-    response: AxiosResponse,
-  ): Promise<AxiosResponse> {
+  async function parseResponse(response: AxiosResponse): Promise<AxiosResponse> {
     const cfg = response.config as JmRequestConfig;
     const meta = cfg.__jmMeta;
 
-    const decoded = await decodeResponsePayload(
-      response.data,
-      meta?.ts || nowTs(),
-    );
+    const decoded = await decodeResponsePayload(response.data, meta?.ts || nowTs());
     const status = Number(response.status || 0);
 
     if (status < 200 || status >= 300) {
-      console.error(
-        `服务器响应异常 (${status || "unknown"}) ${JSON.stringify(decoded)}`,
-      );
-      const serverMsg = resolveServerMessage(
-        decoded,
-        `服务器响应异常 (${status || "unknown"})`,
-      );
+      console.error(`服务器响应异常 (${status || "unknown"}) ${JSON.stringify(decoded)}`);
+      const serverMsg = resolveServerMessage(decoded, `服务器响应异常 (${status || "unknown"})`);
       if (isLoginRequest(cfg.url)) {
         console.error(
           `[jm.login] failed status=${status || "unknown"} message=${serverMsg} body=${JSON.stringify(decoded)}`,
@@ -108,7 +61,7 @@ export function createJmClient() {
         throw new Error(serverMsg || "登录失败");
       }
       if (status === 401 || serverMsg === "請先登入會員") {
-        throw await buildUnauthorizedError("登录过期，请重新登录");
+        throw buildUnauthorizedError(JM_PLUGIN_ID, "登录过期，请重新登录");
       }
       throw new Error(serverMsg);
     }
@@ -123,9 +76,7 @@ export function createJmClient() {
     }
 
     if (decoded && typeof decoded === "object" && !Array.isArray(decoded)) {
-      const nextJwt = String(
-        (decoded as Record<string, unknown>).jwttoken || "",
-      ).trim();
+      const nextJwt = String((decoded as Record<string, unknown>).jwttoken || "").trim();
       if (nextJwt) {
         await setJwtToken(nextJwt);
       }

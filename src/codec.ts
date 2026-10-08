@@ -57,10 +57,7 @@ function normalizeBase64(raw: string): string | null {
   return `${body}${"=".repeat(4 - mod)}`;
 }
 
-async function decryptDataField(
-  payload: string,
-  ts: string,
-): Promise<unknown | null> {
+async function decryptDataField(payload: string, ts: string): Promise<unknown | null> {
   const tsRaw = String(ts || "").trim();
   if (!tsRaw) {
     return null;
@@ -69,10 +66,7 @@ async function decryptDataField(
   for (const seed of Config.JM_SETTING_AES_SEEDS) {
     try {
       const key = await md5Hex(`${tsRaw}${seed}`);
-      const decrypted = await hostRuntime.crypto.aesEcbPkcs7Decrypt(
-        bytesFromBase64(payload),
-        key,
-      );
+      const decrypted = await hostRuntime.crypto.aesEcbPkcs7Decrypt(bytesFromBase64(payload), key);
       const text = bytesToUtf8(decrypted);
       if (!text.trim()) {
         continue;
@@ -97,9 +91,7 @@ async function normalizeRawResponse(raw: unknown): Promise<unknown> {
 
   if (ArrayBuffer.isView(raw)) {
     return bytesToUtf8(
-      await maybeGunzipBytes(
-        new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength),
-      ),
+      await maybeGunzipBytes(new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)),
     );
   }
 
@@ -125,10 +117,7 @@ async function decodeValue(value: unknown, ts: string): Promise<unknown> {
 
   if (value && typeof value === "object") {
     const obj = Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([k, v]) => [
-        String(k),
-        v,
-      ]),
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [String(k), v]),
     );
     const dataField = obj.data;
     if (typeof dataField === "string" && dataField.trim()) {
@@ -152,9 +141,6 @@ async function decodeValue(value: unknown, ts: string): Promise<unknown> {
   return value;
 }
 
-export async function decodeResponsePayload(
-  raw: unknown,
-  ts: string,
-): Promise<unknown> {
+export async function decodeResponsePayload(raw: unknown, ts: string): Promise<unknown> {
   return decodeValue(await normalizeRawResponse(raw), ts);
 }
