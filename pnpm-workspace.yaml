@@ -1,6 +1,6 @@
 allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
-  - breeze-plugin-kit@0.12.0
+  - breeze-plugin-kit
 onlyBuiltDependencies:
   - esbuild

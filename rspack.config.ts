@@ -10,8 +10,7 @@ function getBundleFileName(): string {
   try {
     const raw = readFileSync(resolve(__dirname, "package.json"), "utf-8");
     const pkg = JSON.parse(raw) as { name?: unknown };
-    const packageName =
-      typeof pkg.name === "string" && pkg.name.length > 0 ? pkg.name : "bundle";
+    const packageName = typeof pkg.name === "string" && pkg.name.length > 0 ? pkg.name : "bundle";
     return `${packageName}.bundle.cjs`;
   } catch {
     return "bundle.bundle.cjs";

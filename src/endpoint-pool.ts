@@ -81,15 +81,12 @@ export async function probeDomain(
       outcome: { status: "degraded", latencyMs, httpStatus: status },
     };
   } catch (error) {
-    const code = String(
-      (error as { code?: string } | null)?.code || "",
-    ).toUpperCase();
-    const message = String(
-      (error as { message?: string } | null)?.message || error,
-    );
-    const reason = code.includes("TIMEOUT") || code === "ECONNABORTED"
-      ? `timeout@${timeoutMs}ms`
-      : (code || message).slice(0, 80);
+    const code = String((error as { code?: string } | null)?.code || "").toUpperCase();
+    const message = String((error as { message?: string } | null)?.message || error);
+    const reason =
+      code.includes("TIMEOUT") || code === "ECONNABORTED"
+        ? `timeout@${timeoutMs}ms`
+        : (code || message).slice(0, 80);
     return { baseUrl, outcome: { status: "dead", reason } };
   }
 }
@@ -103,15 +100,12 @@ export async function probeAll(
   const concurrency = Math.max(1, options.concurrency ?? PROBE_CONCURRENCY);
   const queue = domains.map(normalizeBaseUrl).filter(Boolean);
   const results: EndpointProbe[] = [];
-  const workers = Array.from(
-    { length: Math.min(concurrency, queue.length) },
-    async () => {
-      while (queue.length > 0) {
-        const domain = queue.shift()!;
-        results.push(await probeDomain(domain, timeoutMs));
-      }
-    },
-  );
+  const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+    while (queue.length > 0) {
+      const domain = queue.shift()!;
+      results.push(await probeDomain(domain, timeoutMs));
+    }
+  });
   await Promise.all(workers);
   return results;
 }
@@ -174,15 +168,12 @@ export async function probeImageHost(
     }
     return { baseUrl, outcome: { status: "dead", reason: `http=${status} bytes=${bytes}` } };
   } catch (error) {
-    const code = String(
-      (error as { code?: string } | null)?.code || "",
-    ).toUpperCase();
-    const message = String(
-      (error as { message?: string } | null)?.message || error,
-    );
-    const reason = code.includes("TIMEOUT") || code === "ECONNABORTED"
-      ? `timeout@${timeoutMs}ms`
-      : (code || message).slice(0, 80);
+    const code = String((error as { code?: string } | null)?.code || "").toUpperCase();
+    const message = String((error as { message?: string } | null)?.message || error);
+    const reason =
+      code.includes("TIMEOUT") || code === "ECONNABORTED"
+        ? `timeout@${timeoutMs}ms`
+        : (code || message).slice(0, 80);
     return { baseUrl, outcome: { status: "dead", reason } };
   }
 }

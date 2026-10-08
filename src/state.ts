@@ -81,21 +81,12 @@ function generateAndroidUserAgent(deviceId: string) {
     "124.0.6367.179",
     "125.0.6422.165",
   ];
-  const buildCodes = [
-    "TQ1A.230305.002",
-    "UP1A.231005.007",
-    "UQ1A.240205.002",
-    "AP1A.240405.002",
-  ];
+  const buildCodes = ["TQ1A.230305.002", "UP1A.231005.007", "UQ1A.240205.002", "AP1A.240405.002"];
 
-  const android =
-    androidVersions[Math.floor(Math.random() * androidVersions.length)] || "13";
+  const android = androidVersions[Math.floor(Math.random() * androidVersions.length)] || "13";
   const chrome =
-    chromeVersions[Math.floor(Math.random() * chromeVersions.length)] ||
-    "120.0.6099.230";
-  const build =
-    buildCodes[Math.floor(Math.random() * buildCodes.length)] ||
-    "TQ1A.230305.002";
+    chromeVersions[Math.floor(Math.random() * chromeVersions.length)] || "120.0.6099.230";
+  const build = buildCodes[Math.floor(Math.random() * buildCodes.length)] || "TQ1A.230305.002";
 
   return `Mozilla/5.0 (Linux; Android ${android}; ${deviceId} Build/${build}; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/${chrome} Mobile Safari/537.36`;
 }
@@ -117,10 +108,7 @@ export async function getUserAgent() {
 
 export function cacheKeyFromConfig(config: CacheKeyConfig): string {
   const q = config.params ? JSON.stringify(config.params) : "";
-  const body =
-    config.data === undefined || config.data === null
-      ? ""
-      : String(config.data);
+  const body = config.data === undefined || config.data === null ? "" : String(config.data);
   return `${config.method}|${config.url}|${q}|${body}`;
 }
 
@@ -143,10 +131,7 @@ export async function getCachedResponse(config: CacheKeyConfig) {
   return raw.value ?? null;
 }
 
-export async function setCachedResponse(
-  config: CacheKeyConfig,
-  value: unknown,
-) {
+export async function setCachedResponse(config: CacheKeyConfig, value: unknown) {
   const key = cacheKeyFromConfig(config);
   try {
     await cacheSet(scopedKey(`resp:${key}`), {
@@ -260,9 +245,7 @@ export async function clearRuntimeEndpointCache() {
  * 剔除坏节点: 从缓存池里去掉 failedBase, 首选顺延到下一条.
  * 返回剔除后的快照; 池里只剩一条或找不到时返回 null(调用方不 failover).
  */
-export async function dropFailedApiBase(
-  failedBase: string,
-): Promise<RuntimeEndpointCache | null> {
+export async function dropFailedApiBase(failedBase: string): Promise<RuntimeEndpointCache | null> {
   const cached = await getRuntimeEndpointCache();
   if (!cached || cached.hostPool.length <= 1) return null;
   const remaining = cached.hostPool.filter((base) => base !== failedBase);

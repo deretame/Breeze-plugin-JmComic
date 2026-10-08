@@ -8,9 +8,7 @@ const brotliCompressAsync = promisify(brotliCompress);
 
 async function main() {
   const distDir = resolve(process.cwd(), "dist");
-  const files = (await readdir(distDir)).filter((file) =>
-    file.endsWith(".bundle.cjs"),
-  );
+  const files = (await readdir(distDir)).filter((file) => file.endsWith(".bundle.cjs"));
 
   if (files.length === 0) {
     throw new Error(`[brotli] no .bundle.cjs file found in ${distDir}`);
@@ -28,9 +26,7 @@ async function main() {
     });
 
     await writeFile(targetPath, compressed);
-    const ratio = source.length
-      ? ((compressed.length / source.length) * 100).toFixed(2)
-      : "0.00";
+    const ratio = source.length ? ((compressed.length / source.length) * 100).toFixed(2) : "0.00";
     console.log(
       `[brotli] generated: ${targetPath} (${source.length} -> ${compressed.length}, ${ratio}%)`,
     );

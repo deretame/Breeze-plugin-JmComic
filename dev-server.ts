@@ -1,10 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
-import {
-  createServer,
-  type IncomingMessage,
-  type ServerResponse,
-} from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -116,12 +112,8 @@ function printListenEndpoints(): void {
 
   console.error(`[bundle-dev] listening on ${bindHost}:${activePort}`);
   console.error("[bundle-dev] available endpoints (by interface):");
-  console.error(
-    `[bundle-dev]   [local] bundle: ${getServerUrl(bundlePath, "localhost")}`,
-  );
-  console.error(
-    `[bundle-dev]   [local] log:    ${getServerUrl(logPath, "localhost")}`,
-  );
+  console.error(`[bundle-dev]   [local] bundle: ${getServerUrl(bundlePath, "localhost")}`);
+  console.error(`[bundle-dev]   [local] log:    ${getServerUrl(logPath, "localhost")}`);
 
   let currentInterfaceName = "";
   for (const item of listenAddresses) {
@@ -134,9 +126,7 @@ function printListenEndpoints(): void {
     console.error(
       `[bundle-dev]     - ${item.family}${suffix} bundle: ${getServerUrl(bundlePath, item.address)}`,
     );
-    console.error(
-      `[bundle-dev]       log:  ${getServerUrl(logPath, item.address)}`,
-    );
+    console.error(`[bundle-dev]       log:  ${getServerUrl(logPath, item.address)}`);
   }
 }
 
@@ -144,8 +134,7 @@ async function setupBundleNameFromPackageJson(): Promise<void> {
   try {
     const raw = await readFile(packageJsonPath, "utf-8");
     const pkg = JSON.parse(raw) as { name?: unknown };
-    const packageName =
-      typeof pkg.name === "string" && pkg.name.length > 0 ? pkg.name : "bundle";
+    const packageName = typeof pkg.name === "string" && pkg.name.length > 0 ? pkg.name : "bundle";
 
     bundleFileName = `${packageName}.bundle.cjs`;
     bundleRoutePath = `/${bundleFileName}`;
@@ -165,9 +154,7 @@ function isAddressInUseError(err: unknown): boolean {
   return Reflect.get(err, "code") === "EADDRINUSE";
 }
 
-async function listenWithPortFallback(
-  server: ReturnType<typeof createServer>,
-): Promise<void> {
+async function listenWithPortFallback(server: ReturnType<typeof createServer>): Promise<void> {
   let tryPort = preferredPort;
 
   while (true) {
@@ -195,9 +182,7 @@ async function listenWithPortFallback(
         throw err;
       }
 
-      console.error(
-        `[bundle-dev] port ${tryPort} is in use, trying ${tryPort + 1}`,
-      );
+      console.error(`[bundle-dev] port ${tryPort} is in use, trying ${tryPort + 1}`);
       tryPort += 1;
     }
   }
@@ -305,9 +290,7 @@ async function refreshBuildState(): Promise<void> {
   state.size = bytes.byteLength;
   state.error = null;
 
-  console.error(
-    `[bundle-dev] built sha256=${sha256.slice(0, 12)} size=${bytes.byteLength}`,
-  );
+  console.error(`[bundle-dev] built sha256=${sha256.slice(0, 12)} size=${bytes.byteLength}`);
 }
 
 async function handleBundle(res: ServerResponse): Promise<void> {
@@ -340,10 +323,7 @@ function handleDefault(req: IncomingMessage, res: ServerResponse): void {
   );
 }
 
-async function handleLog(
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<void> {
+async function handleLog(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (req.method !== "POST") {
     setCommonHeaders(res, "application/json; charset=utf-8");
     res.statusCode = 405;
@@ -359,9 +339,7 @@ async function handleLog(
     const payload = parsed?.payload;
 
     const text =
-      typeof message === "string" && message.length > 0
-        ? message
-        : JSON.stringify(message ?? "");
+      typeof message === "string" && message.length > 0 ? message : JSON.stringify(message ?? "");
 
     if (level === "error") {
       console.error(`[remote-log] ${text}`, payload ?? "");
@@ -428,18 +406,14 @@ async function start(): Promise<void> {
     if (err) {
       state.ok = false;
       state.error = formatRspackError(err);
-      console.error(
-        `[bundle-dev] [${ts}] rebuild #${rebuildCount} failed: ${state.error}`,
-      );
+      console.error(`[bundle-dev] [${ts}] rebuild #${rebuildCount} failed: ${state.error}`);
       return;
     }
 
     if (!stats || stats.hasErrors()) {
       state.ok = false;
       state.error = getErrorFromStats(stats);
-      console.error(
-        `[bundle-dev] [${ts}] rebuild #${rebuildCount} failed: ${state.error}`,
-      );
+      console.error(`[bundle-dev] [${ts}] rebuild #${rebuildCount} failed: ${state.error}`);
       return;
     }
 
@@ -462,18 +436,14 @@ async function start(): Promise<void> {
       const method = req.method || "GET";
       const path = req.url || "/";
       const elapsedMs = Date.now() - startAt;
-      console.error(
-        `[bundle-dev] ${method} ${path} -> ${res.statusCode} (${elapsedMs}ms)`,
-      );
+      console.error(`[bundle-dev] ${method} ${path} -> ${res.statusCode} (${elapsedMs}ms)`);
     });
     void route(req, res);
   });
 
   await listenWithPortFallback(server);
   if (activePort !== preferredPort) {
-    console.error(
-      `[bundle-dev] requested port ${preferredPort} was unavailable`,
-    );
+    console.error(`[bundle-dev] requested port ${preferredPort} was unavailable`);
   }
   console.error(`[bundle-dev] watching ${resolve(__dirname, "src")}`);
 
