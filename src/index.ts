@@ -18,10 +18,10 @@ import type {
   ImageItem,
   InfoContract,
   ListFavoriteFoldersResult,
-  MetadataListItem,
-  OpenSearchAction,
   LoginBundleContract,
   LoginSubmitResult,
+  MetadataListItem,
+  OpenSearchAction,
   RecommendItem,
   SettingsBundleContract,
   ToggleFavoriteResult,
@@ -38,6 +38,7 @@ import {
 } from "breeze-plugin-kit";
 import { createJmClient } from "./client";
 import { Config } from "./constants";
+import type { EndpointProbe, ImageProbe } from "./endpoint-pool";
 import {
   HOSTCFG_TIMEOUT_MS,
   PROBE_CONCURRENCY,
@@ -48,7 +49,6 @@ import {
   probeAll,
   probeImageHost,
 } from "./endpoint-pool";
-import type { EndpointProbe, ImageProbe } from "./endpoint-pool";
 import { toFriendlyError } from "./errors";
 import { buildJmCloudFavoriteScene, buildPluginInfo } from "./get-info";
 import type { BuiltRequest } from "./request-config";
@@ -827,7 +827,10 @@ async function loadPluginSetting(key: string, fallback: unknown) {
  */
 function compareVersions(a: string, b: string): number {
   // dart.getAppVersion 返回 JSON 编码串（首尾带引号），先剥掉。
-  const clean = (v: string) => String(v ?? "").trim().replace(/^"+|"+$/g, "");
+  const clean = (v: string) =>
+    String(v ?? "")
+      .trim()
+      .replace(/^"+|"+$/g, "");
   const pa = clean(a)
     .split(".")
     .map((x) => Number(x) || 0);
@@ -1087,7 +1090,7 @@ async function loadHostPool(): Promise<string[]> {
   if (!Array.isArray(parsed.Server)) {
     return [];
   }
-  return parsed.Server.map((item) => String(item || "").trim()).filter(Boolean);
+  return parsed.Server.map((item) => normalizeBaseUrl(item)).filter(Boolean);
 }
 
 /** 全池 setting 探针选线: 返回按 ok < degraded < dead、延迟排序的可用池. */
@@ -1136,7 +1139,9 @@ async function applyOrderedPool(
   hostPool: string[],
 ): Promise<string> {
   const pool =
-    ordered.length > 0 ? ordered : [ordered[0] ?? hostPool[0] ?? Config.JM_FALLBACK_API_BASE];
+    ordered.length > 0
+      ? ordered
+      : [normalizeBaseUrl(hostPool[0] ?? "") || Config.JM_FALLBACK_API_BASE];
   const apiBaseUrl = pool[0]!;
   const image = imagePool[0] ?? Config.JM_FALLBACK_IMAGE_BASE;
   await setRuntimeEndpointCache({
@@ -2580,7 +2585,10 @@ async function addJmFavorite(comicId: string, input: JmWorkflowAuth): Promise<vo
   });
   const rawMsg = res && typeof res === "object" && "msg" in res ? res.msg : "";
   if (String(rawMsg ?? "").includes("已满")) {
-    await flutterTools.showToast({ message: "收藏数已达上限", level: "warning" });
+    await flutterTools.showToast({
+      message: "收藏数已达上限",
+      level: "warning",
+    });
   }
 }
 
@@ -3120,7 +3128,3 @@ export default {
   getReadSnapshot,
   fetchImageBytes,
 };
-
-export function getLastEndpointProbes(): EndpointProbe[] {
-  return lastEndpointProbes;
-}
