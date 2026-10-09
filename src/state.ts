@@ -1,5 +1,6 @@
 import { cache } from "breeze-plugin-kit";
 import { Config } from "./constants";
+import { normalizeBaseUrl } from "./endpoint-pool";
 import type { CacheKeyConfig } from "./types";
 import { randomDeviceId } from "./utils";
 
@@ -152,13 +153,13 @@ export async function getRuntimeEndpointCache(
   )) as RuntimeEndpointCache | null;
   if (!raw || typeof raw !== "object") return null;
 
-  const apiBaseUrl = String(raw.apiBaseUrl || "").trim();
-  const imageBaseUrl = String(raw.imageBaseUrl || "").trim();
+  const apiBaseUrl = normalizeBaseUrl(raw.apiBaseUrl || "");
+  const imageBaseUrl = normalizeBaseUrl(raw.imageBaseUrl || "");
   const imagePool = Array.isArray(raw.imagePool)
-    ? raw.imagePool.map((item) => String(item || "").trim()).filter(Boolean)
+    ? raw.imagePool.map((item) => normalizeBaseUrl(item)).filter(Boolean)
     : [];
   const hostPool = Array.isArray(raw.hostPool)
-    ? raw.hostPool.map((item) => String(item || "").trim()).filter(Boolean)
+    ? raw.hostPool.map((item) => normalizeBaseUrl(item)).filter(Boolean)
     : [];
   const updatedAt = Number(raw.updatedAt || 0);
 
@@ -223,15 +224,16 @@ export async function setRuntimeEndpointCache(input: {
   imagePool: string[];
   hostPool: string[];
 }) {
-  const image = String(input.imageBaseUrl || "").trim() || Config.JM_FALLBACK_IMAGE_BASE;
+  const image = normalizeBaseUrl(input.imageBaseUrl || "") || Config.JM_FALLBACK_IMAGE_BASE;
+  const api = normalizeBaseUrl(input.apiBaseUrl || "") || Config.JM_FALLBACK_API_BASE;
   await cacheSet(scopedKey("runtime:endpoints"), {
-    apiBaseUrl: String(input.apiBaseUrl || "").trim(),
+    apiBaseUrl: api,
     imageBaseUrl: image,
     imagePool: Array.isArray(input.imagePool)
-      ? input.imagePool.map((item) => String(item || "").trim()).filter(Boolean)
+      ? input.imagePool.map((item) => normalizeBaseUrl(item)).filter(Boolean)
       : [],
     hostPool: Array.isArray(input.hostPool)
-      ? input.hostPool.map((item) => String(item || "").trim()).filter(Boolean)
+      ? input.hostPool.map((item) => normalizeBaseUrl(item)).filter(Boolean)
       : [],
     updatedAt: Date.now(),
   });

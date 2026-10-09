@@ -1,6 +1,6 @@
 {
   "name": "breeze-plugin-jm-comic",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "type": "module",
   "packageManager": "pnpm@12.5.0",
   "files": [

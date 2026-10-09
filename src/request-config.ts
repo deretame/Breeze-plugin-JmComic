@@ -9,9 +9,17 @@ export type BuiltRequest = {
 
 export async function buildRequestConfig(input: RequestPayload): Promise<BuiltRequest> {
   const method = String(input.method || "GET").toUpperCase();
-  const url = String(input.path || input.url || "").trim();
+  let url = String(input.path || input.url || "").trim();
   if (!url) {
     throw new Error("请求地址不能为空");
+  }
+  if (
+    !/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(url) &&
+    !url.startsWith("/") &&
+    /^[^/:?#]+\.[^/:?#]+([/?#]|$)/.test(url)
+  ) {
+    // 裸域名无 scheme 时 axios(无 baseURL)直接抛 relative URL without a base, 这里补 https://
+    url = `https://${url}`;
   }
 
   const headers: Record<string, string> = {};
