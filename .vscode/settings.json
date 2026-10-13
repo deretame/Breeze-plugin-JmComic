@@ -1,0 +1,15 @@
+{
+    "editor.formatOnSave": true,
+    "editor.formatOnSaveMode": "file",
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "[typescript]": {
+        "editor.defaultFormatter": "oxc.oxc-vscode"
+    },
+    "[typescriptreact]": {
+        "editor.defaultFormatter": "oxc.oxc-vscode"
+    },
+    "[javascript]": {
+        "editor.defaultFormatter": "oxc.oxc-vscode"
+    },
+    "debug.javascript.autoAttachFilter": "disabled",
+}
