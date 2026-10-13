@@ -17,14 +17,12 @@ import type {
   FunctionPageContract,
   ImageItem,
   InfoContract,
-  ListFavoriteFoldersResult,
   LoginBundleContract,
   LoginSubmitResult,
   MetadataListItem,
   OpenSearchAction,
   RecommendItem,
   SettingsBundleContract,
-  ToggleFavoriteResult,
   ToggleLikeResult,
   UserInfoBundleContract,
 } from "breeze-plugin-kit";
@@ -49,7 +47,6 @@ import {
   probeAll,
   probeImageHost,
 } from "./endpoint-pool";
-import { toFriendlyError } from "./errors";
 import { buildJmCloudFavoriteScene, buildPluginInfo } from "./get-info";
 import type { BuiltRequest } from "./request-config";
 import { buildRequestConfig } from "./request-config";
@@ -161,7 +158,7 @@ async function handleRequestError(
       return cached;
     }
   }
-  throw toFriendlyError(err);
+  throw err;
 }
 
 function isNetworkFailure(err: unknown): boolean {
@@ -259,25 +256,6 @@ type JmCloudFavoritePayload = {
 type JmLikePayload = {
   comicId?: string;
   currentLiked?: boolean;
-  extern?: Record<string, unknown>;
-  path?: string;
-  useJwt?: boolean;
-  jwtToken?: string;
-};
-
-type JmToggleFavoritePayload = {
-  comicId?: string;
-  currentFavorite?: boolean;
-  extern?: Record<string, unknown>;
-  path?: string;
-  useJwt?: boolean;
-  jwtToken?: string;
-};
-
-type JmFavoriteFolderPayload = {
-  comicId?: string;
-  folderId?: string;
-  folderName?: string;
   extern?: Record<string, unknown>;
   path?: string;
   useJwt?: boolean;
@@ -999,20 +977,12 @@ async function loginWithPassword(payload: JmLoginPayload = {}): Promise<LoginSub
   }
 
   const path = `${await getApiBaseUrl()}/login`;
-  let result: unknown;
-  try {
-    result = await jmRequest({
-      path,
-      method: "POST",
-      formData: { username: account, password },
-      useJwt: false,
-    });
-  } catch (error) {
-    console.error(
-      `[jm.login] request failed path=${path} accountLen=${account.length} message=${String((error as { message?: string } | null)?.message || error)}`,
-    );
-    throw error;
-  }
+  const result = await jmRequest({
+    path,
+    method: "POST",
+    formData: { username: account, password },
+    useJwt: false,
+  });
 
   const body = (result ?? {}) as Record<string, unknown>;
   const jwtToken = String(body.jwttoken ?? "");
@@ -2385,101 +2355,26 @@ async function toggleLike(payload: JmLikePayload = {}): Promise<ToggleLikeResult
   }
 
   const path = `${await getApiBaseUrl()}/like`;
-  await jmRequest({
+  const raw = (await jmRequest({
     path,
     method: "POST",
     formData: { id: comicId },
     cache: false,
     useJwt: payload.useJwt ?? true,
     jwtToken: payload.jwtToken,
-  });
+  })) as Record<string, any>;
+  const status = String(raw?.status ?? "")
+    .trim()
+    .toLowerCase();
+  if (status && status !== "ok" && status !== "success") {
+    throw new Error(String(raw?.msg ?? raw?.errorMsg ?? "点赞失败").trim() || "点赞失败");
+  }
 
   return {
     liked: true,
   };
 }
 
-async function toggleFavorite(
-  payload: JmToggleFavoritePayload = {},
-): Promise<ToggleFavoriteResult> {
-  const comicId = String(payload.comicId ?? "").trim();
-  if (!comicId) {
-    throw new Error("comicId 不能为空");
-  }
-
-  const path = `${await getApiBaseUrl()}/favorite`;
-  const res = await jmRequest({
-    path,
-    method: "POST",
-    formData: { aid: comicId },
-    cache: false,
-    useJwt: payload.useJwt ?? true,
-    jwtToken: payload.jwtToken,
-  });
-
-  console.debug("res", res);
-
-  if (res?.msg?.includes("已满")) {
-    flutterTools.showToast({ message: "收藏数已达上限", level: "warning" });
-  }
-
-  const favorited = !toBool(payload.currentFavorite, false);
-
-  return {
-    favorited,
-    nextStep: favorited ? "selectFolder" : "none",
-  };
-}
-
-async function listFavoriteFolders(
-  payload: JmFavoriteFolderPayload = {},
-): Promise<ListFavoriteFoldersResult> {
-  const path = `${await getApiBaseUrl()}/favorite`;
-  const raw = (await jmRequest({
-    path,
-    method: "GET",
-    params: { page: 1, folder_id: "", o: "mr" },
-    cache: false,
-    useJwt: payload.useJwt ?? true,
-    jwtToken: payload.jwtToken,
-  })) as Record<string, any>;
-
-  const folders = Array.isArray(raw.folder_list) ? raw.folder_list : [];
-  return {
-    items: folders.map((item: any) => ({
-      id: String(item?.FID ?? ""),
-      name: String(item?.name ?? ""),
-    })),
-  };
-}
-
-async function moveFavoriteToFolder(payload: JmFavoriteFolderPayload = {}) {
-  const comicId = String(payload.comicId ?? "").trim();
-  const folderId = String(payload.folderId ?? "").trim();
-  const folderName = String(payload.folderName ?? "").trim();
-  if (!comicId || !folderId) {
-    throw new Error("comicId 或 folderId 不能为空");
-  }
-
-  const path = `${await getApiBaseUrl()}/favorite_folder`;
-  await jmRequest({
-    path,
-    method: "POST",
-    formData: {
-      type: "move",
-      folder_id: folderId,
-      folder_name: folderName,
-      aid: comicId,
-    },
-    cache: false,
-    useJwt: payload.useJwt ?? true,
-    jwtToken: payload.jwtToken,
-  });
-
-  return {
-    ok: true,
-  };
-}
 const JM_FAVORITE_CONTINUATION_PREFIX = "jm-favorite:v1:";
 const JM_FAVORITE_CONTINUATION_TTL_MS = 15 * 60 * 1000;
 
@@ -2524,7 +2419,6 @@ function decodeFavoriteContinuation(value: string): JmFavoriteContinuation | nul
     if (
       (parsed.action !== "add" && parsed.action !== "move") ||
       !comicId ||
-      folderIds.length === 0 ||
       !Number.isFinite(createdAt) ||
       Date.now() - createdAt > JM_FAVORITE_CONTINUATION_TTL_MS
     ) {
@@ -2573,23 +2467,59 @@ async function fetchJmFavoriteFolders(input: JmWorkflowAuth): Promise<JmFavorite
     })
     .filter((item) => item.id.length > 0);
 }
-
-async function addJmFavorite(comicId: string, input: JmWorkflowAuth): Promise<void> {
-  const res = await jmRequest({
+async function addJmFavorite(comicId: string, input: JmWorkflowAuth): Promise<Record<string, any>> {
+  const raw = (await jmRequest({
     path: `${await getApiBaseUrl()}/favorite`,
     method: "POST",
     formData: { aid: comicId },
     cache: false,
     useJwt: input.useJwt ?? true,
     jwtToken: input.jwtToken,
-  });
-  const rawMsg = res && typeof res === "object" && "msg" in res ? res.msg : "";
-  if (String(rawMsg ?? "").includes("已满")) {
-    await flutterTools.showToast({
-      message: "收藏数已达上限",
-      level: "warning",
-    });
+  })) as Record<string, any>;
+  const status = String(raw?.status ?? "")
+    .trim()
+    .toLowerCase();
+  if (status && status !== "ok") {
+    throw new Error(String(raw?.msg ?? "收藏失败").trim() || "收藏失败");
   }
+  return raw;
+}
+
+async function createJmFavoriteFolder(
+  name: string,
+  input: JmWorkflowAuth,
+): Promise<JmFavoriteFolder> {
+  const folderName = name.trim();
+  const raw = (await jmRequest({
+    path: `${await getApiBaseUrl()}/favorite_folder`,
+    method: "POST",
+    formData: {
+      type: "add",
+      folder_id: "",
+      folder_name: folderName,
+      aid: "",
+    },
+    cache: false,
+    useJwt: input.useJwt ?? true,
+    jwtToken: input.jwtToken,
+  })) as Record<string, any>;
+
+  const status = String(raw?.status ?? "")
+    .trim()
+    .toLowerCase();
+  if (status && status !== "ok") {
+    throw new Error(String(raw?.msg ?? "新建收藏夹失败").trim() || "新建收藏夹失败");
+  }
+  const id = String(raw?.FID ?? raw?.folder_id ?? "").trim();
+  if (id) {
+    return { id, name: folderName };
+  }
+  const folders = await fetchJmFavoriteFolders(input);
+  const created = folders.find((folder) => folder.name === folderName);
+  if (!created) {
+    throw new Error(String(raw?.msg ?? "新建收藏夹失败").trim() || "新建收藏夹失败");
+  }
+  return created;
 }
 
 async function moveJmFavorite(
@@ -2597,7 +2527,7 @@ async function moveJmFavorite(
   folderId: string,
   input: JmWorkflowAuth,
 ): Promise<void> {
-  await jmRequest({
+  const raw = (await jmRequest({
     path: `${await getApiBaseUrl()}/favorite_folder`,
     method: "POST",
     formData: {
@@ -2609,7 +2539,13 @@ async function moveJmFavorite(
     cache: false,
     useJwt: input.useJwt ?? true,
     jwtToken: input.jwtToken,
-  });
+  })) as Record<string, any>;
+  const status = String(raw?.status ?? "")
+    .trim()
+    .toLowerCase();
+  if (status && status !== "ok") {
+    throw new Error(String(raw?.msg ?? "移动收藏失败").trim() || "移动收藏失败");
+  }
 }
 
 function buildJmFavoriteFolderInput(
@@ -2628,6 +2564,13 @@ function buildJmFavoriteFolderInput(
       id: folder.id,
       label: folder.name || folder.id,
     })),
+    allowCreate: true,
+    createField: {
+      key: "folderName",
+      type: "text",
+      label: "新建收藏夹",
+      placeholder: "输入收藏夹名称",
+    },
   };
 }
 
@@ -2642,9 +2585,6 @@ async function startFavoriteAction(
   if (action === "add" || action === "move") {
     try {
       const folders = await fetchJmFavoriteFolders(readJmWorkflowAuth(toStringMap(payload.extern)));
-      if (folders.length === 0) {
-        return favoriteFailure(new Error("未能获取收藏夹列表"), action === "move");
-      }
       return {
         status: "awaitingInput",
         favorited: action === "move",
@@ -2693,14 +2633,20 @@ async function continueFavoriteAction(
     };
   }
   try {
-    if (input.created) {
-      throw new Error("禁漫不支持新建收藏夹");
+    const auth = readJmWorkflowAuth(toStringMap(payload.extern));
+    const created = String(input.created ?? "").trim();
+    if (created) {
+      const folder = await createJmFavoriteFolder(created, auth);
+      if (token.action === "add") {
+        await addJmFavorite(token.comicId, auth);
+      }
+      await moveJmFavorite(token.comicId, folder.id, auth);
+      return { status: "completed", favorited: true, committed: true };
     }
     const folderId = String(input.value ?? "").trim();
-    if (!folderId || !token.folderIds.includes(folderId)) {
-      throw new Error("选择的收藏夹不存在或已失效");
+    if (!folderId) {
+      throw new Error("未选择有效的收藏夹");
     }
-    const auth = readJmWorkflowAuth(toStringMap(payload.extern));
     if (token.action === "add") {
       await addJmFavorite(token.comicId, auth);
     }
@@ -3119,9 +3065,6 @@ export default {
   toggleLike,
   startFavoriteAction,
   continueFavoriteAction,
-  toggleFavorite,
-  listFavoriteFolders,
-  moveFavoriteToFolder,
   getWeekRankingData,
   searchComic,
   getChapter,

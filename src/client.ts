@@ -3,7 +3,7 @@ import axios from "axios";
 import { buildUnauthorizedError } from "breeze-plugin-kit";
 import { decodeResponsePayload } from "./codec";
 import { Config } from "./constants";
-import { resolveServerMessage, toFriendlyError } from "./errors";
+import { resolveServerMessage } from "./errors";
 import {
   cacheKeyFromConfig,
   getCachedResponse,
@@ -15,25 +15,6 @@ import type { JmMeta, JmRequestConfig } from "./types";
 import { getHost, md5Hex, nowTs } from "./utils";
 
 const JM_PLUGIN_ID = "bf99008d-010b-4f17-ac7c-61a9b57dc3d9";
-
-function isLoginRequest(url: unknown): boolean {
-  return String(url || "")
-    .toLowerCase()
-    .includes("/login");
-}
-
-function looksLikeCredentialError(message: string): boolean {
-  const text = message.toLowerCase();
-  return (
-    text.includes("账号") ||
-    text.includes("帳號") ||
-    text.includes("用户名") ||
-    text.includes("密码") ||
-    text.includes("密碼") ||
-    text.includes("password") ||
-    text.includes("credential")
-  );
-}
 
 export function createJmClient() {
   const client = axios.create({
@@ -49,29 +30,27 @@ export function createJmClient() {
     const status = Number(response.status || 0);
 
     if (status < 200 || status >= 300) {
-      console.error(`服务器响应异常 (${status || "unknown"}) ${JSON.stringify(decoded)}`);
       const serverMsg = resolveServerMessage(decoded, `服务器响应异常 (${status || "unknown"})`);
-      if (isLoginRequest(cfg.url)) {
-        console.error(
-          `[jm.login] failed status=${status || "unknown"} message=${serverMsg} body=${JSON.stringify(decoded)}`,
-        );
-        if (status === 401 || looksLikeCredentialError(serverMsg)) {
-          throw new Error(serverMsg || "账号或密码错误");
-        }
-        throw new Error(serverMsg || "登录失败");
-      }
-      if (status === 401 || serverMsg === "請先登入會員") {
+      const isLogin = String(cfg.url || "")
+        .toLowerCase()
+        .includes("/login");
+      if (!isLogin && (status === 401 || serverMsg === "請先登入會員")) {
         throw buildUnauthorizedError(JM_PLUGIN_ID, "登录过期，请重新登录");
       }
       throw new Error(serverMsg);
     }
 
-    if (isLoginRequest(cfg.url)) {
-      const serverMsg = resolveServerMessage(decoded, "");
-      if (looksLikeCredentialError(serverMsg)) {
-        console.error(
-          `[jm.login] credential_error message=${serverMsg} body=${JSON.stringify(decoded)}`,
-        );
+    if (decoded && typeof decoded === "object" && !Array.isArray(decoded) && "code" in decoded) {
+      const bodyCode = Number((decoded as Record<string, unknown>).code);
+      if (Number.isFinite(bodyCode) && bodyCode !== 200) {
+        const serverMsg = resolveServerMessage(decoded, `请求失败 (${bodyCode})`);
+        const isLogin = String(cfg.url || "")
+          .toLowerCase()
+          .includes("/login");
+        if (!isLogin && (bodyCode === 401 || serverMsg === "請先登入會員")) {
+          throw buildUnauthorizedError(JM_PLUGIN_ID, "登录过期，请重新登录");
+        }
+        throw new Error(serverMsg);
       }
     }
 
@@ -167,13 +146,9 @@ export function createJmClient() {
     async (err: unknown) => {
       const raw = err as { response?: AxiosResponse };
       if (raw?.response) {
-        try {
-          return await parseResponse(raw.response);
-        } catch (parseErr) {
-          return Promise.reject(toFriendlyError(parseErr));
-        }
+        return parseResponse(raw.response);
       }
-      return Promise.reject(toFriendlyError(err));
+      throw err;
     },
   );
 
