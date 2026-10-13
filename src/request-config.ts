@@ -1,4 +1,3 @@
-import { setJwtToken } from "./state";
 import type { JmRequestConfig, RequestPayload } from "./types";
 import { nowTs, toQueryString } from "./utils";
 
@@ -23,11 +22,6 @@ export async function buildRequestConfig(input: RequestPayload): Promise<BuiltRe
   }
 
   const headers: Record<string, string> = {};
-  const inputJwt = String(input.jwtToken || "").trim();
-  if (inputJwt) {
-    await setJwtToken(inputJwt);
-  }
-
   let body = input.data;
   if (method === "POST" && input.formData) {
     body = toQueryString(input.formData);
@@ -49,7 +43,6 @@ export async function buildRequestConfig(input: RequestPayload): Promise<BuiltRe
     __jmMeta: {
       ts: nowTs(),
       cacheEnabled,
-      useJwt: input.useJwt !== false,
     },
   };
 

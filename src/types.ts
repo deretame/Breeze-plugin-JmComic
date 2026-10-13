@@ -8,15 +8,12 @@ export type RequestPayload = {
   data?: unknown;
   formData?: Record<string, unknown>;
   cache?: boolean;
-  useJwt?: boolean;
-  jwtToken?: string;
 };
 
 export type JmMeta = {
   ts: string;
   cacheEnabled: boolean;
   cacheKey?: string;
-  useJwt: boolean;
   fromCache?: boolean;
 };
 

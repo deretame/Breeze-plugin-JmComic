@@ -3,26 +3,41 @@ import type {
   ActionItem,
   AdvancedSearchContract,
   CapabilitiesBundleContract,
+  ChapterContentContract,
+  ChapterPage,
+  ChapterPayload,
+  ChapterWithPages,
   ComicDetailContract,
   ComicDetailData,
   ComicDetailNormal,
+  ComicDetailPayload,
   ComicInfoPageAction,
   ComicListSceneBundleContract,
   CommentFeedContract,
+  CommentFeedPayload,
+  CommentItem,
   FavoriteWorkflowContinuePayload,
   FavoriteWorkflowInput,
   FavoriteWorkflowResult,
   FavoriteWorkflowStartPayload,
+  FetchImageBytesPayload,
   FilterBundleContract,
   FunctionPageContract,
+  GetFunctionPagePayload,
   ImageItem,
   InfoContract,
   LoginBundleContract,
+  LoginSubmitPayload,
   LoginSubmitResult,
   MetadataListItem,
   OpenSearchAction,
+  ReadSnapshotContract,
+  ReadSnapshotPayload,
   RecommendItem,
+  SearchComicPayload,
+  SearchResultContract,
   SettingsBundleContract,
+  ToggleLikePayload,
   ToggleLikeResult,
   UserInfoBundleContract,
 } from "breeze-plugin-kit";
@@ -70,7 +85,10 @@ const JM_PLUGIN_ID = "bf99008d-010b-4f17-ac7c-61a9b57dc3d9";
 
 const jmClient = createJmClient();
 
-async function fetchImageBytes({ url = "", timeoutMs = 30000 } = {}) {
+async function fetchImageBytes({
+  url = "",
+  timeoutMs = 30000,
+}: FetchImageBytesPayload = {}): Promise<Uint8Array<ArrayBufferLike>> {
   const targetUrl = url.trim();
   if (!targetUrl) throw new Error("url 不能为空");
 
@@ -82,8 +100,7 @@ async function fetchImageBytes({ url = "", timeoutMs = 30000 } = {}) {
       timeout: Math.max(0, timeoutMs) || 30000,
       responseType: "arraybuffer",
     });
-    const nativeBufferId = await native.put(new Uint8Array(response.data));
-    return { nativeBufferId: Number(nativeBufferId) };
+    return new Uint8Array(response.data);
   } catch (err) {
     // 图床网络层失败: 在 imagePool 内切下一台重试一次
     if (!isNetworkFailure(err)) throw err;
@@ -99,18 +116,12 @@ async function fetchImageBytes({ url = "", timeoutMs = 30000 } = {}) {
       timeout: Math.max(0, timeoutMs) || 30000,
       responseType: "arraybuffer",
     });
-    const nativeBufferId = await native.put(new Uint8Array(response.data));
-    return { nativeBufferId: Number(nativeBufferId) };
+    return new Uint8Array(response.data);
   }
 }
 
-async function jmRequest(input: RequestPayload) {
-  const resolvedJwtToken =
-    String(input.jwtToken ?? "").trim() || String(await loadPluginSetting("auth.jwt", "")).trim();
-  const { config, cacheEnabled } = await buildRequestConfig({
-    ...input,
-    jwtToken: resolvedJwtToken,
-  });
+async function jmRequest(input: RequestPayload): Promise<any> {
+  const { config, cacheEnabled } = await buildRequestConfig(input);
 
   try {
     const response = await jmClient.request(config);
@@ -176,61 +187,24 @@ function isNetworkFailure(err: unknown): boolean {
   return message.includes("timeout") || message.includes("network");
 }
 
-type ComicDetailPayload = {
-  comicId?: string;
-  extern?: Record<string, unknown>;
-  path?: string;
-  useJwt?: boolean;
-  jwtToken?: string;
-};
+type JmSearchPayload = SearchComicPayload;
 
-type JmSearchPayload = {
-  keyword?: string;
-  page?: number;
-  extern?: Record<string, unknown>;
-  path?: string;
-  useJwt?: boolean;
-  jwtToken?: string;
-};
-
-type JmChapterPayload = {
-  comicId?: string;
-  chapterId?: string;
-  extern?: Record<string, unknown>;
-  path?: string;
-  useJwt?: boolean;
-  jwtToken?: string;
-};
-
-type JmReadSnapshotPayload = {
-  comicId?: string;
-  chapterId?: string;
-  extern?: Record<string, unknown>;
-};
+type JmReadSnapshotPayload = ReadSnapshotPayload;
 
 type JmHomePayload = {
   page?: number;
   extern?: Record<string, unknown>;
-  path?: string;
-  useJwt?: boolean;
-  jwtToken?: string;
 };
 
 type JmRankingPayload = {
   page?: number;
   extern?: Record<string, unknown>;
-  path?: string;
-  useJwt?: boolean;
-  jwtToken?: string;
 };
 
 type JmPromoteListPayload = {
   id?: number;
   page?: number;
   extern?: Record<string, unknown>;
-  path?: string;
-  useJwt?: boolean;
-  jwtToken?: string;
 };
 
 type JmWeekRankingPayload = {
@@ -238,9 +212,6 @@ type JmWeekRankingPayload = {
   type?: string;
   page?: number;
   extern?: Record<string, unknown>;
-  path?: string;
-  useJwt?: boolean;
-  jwtToken?: string;
 };
 
 type JmCloudFavoritePayload = {
@@ -248,28 +219,11 @@ type JmCloudFavoritePayload = {
   folderId?: string;
   order?: string;
   extern?: Record<string, unknown>;
-  path?: string;
-  useJwt?: boolean;
-  jwtToken?: string;
 };
 
-type JmLikePayload = {
-  comicId?: string;
-  currentLiked?: boolean;
-  extern?: Record<string, unknown>;
-  path?: string;
-  useJwt?: boolean;
-  jwtToken?: string;
-};
+type JmLikePayload = ToggleLikePayload;
 
-type JmCommentFeedPayload = {
-  comicId?: string;
-  page?: number;
-  extern?: Record<string, unknown>;
-  path?: string;
-  useJwt?: boolean;
-  jwtToken?: string;
-};
+type JmCommentFeedPayload = CommentFeedPayload;
 
 type RankingFilterOption = {
   label: string;
@@ -278,13 +232,9 @@ type RankingFilterOption = {
   children?: RankingFilterOption[];
 };
 
-type JmLoginPayload = {
+type JmLoginPayload = LoginSubmitPayload & {
   account?: string;
   password?: string;
-  extern?: Record<string, unknown>;
-  path?: string;
-  useJwt?: boolean;
-  jwtToken?: string;
 };
 
 function toNum(value: unknown, fallback = 0): number {
@@ -460,6 +410,7 @@ function toComicItem(item: any, imageBase: string) {
     cover: {
       id,
       url: resolveJmCoverUrl(item, imageBase),
+      name: `${id}.jpg`,
       path: `${id}.jpg`,
       extern: {
         path: `${id}.jpg`,
@@ -888,12 +839,8 @@ async function getUserInfoBundle(): Promise<UserInfoBundleContract> {
       method: "POST",
       formData: { username: account, password },
       cache: false,
-      useJwt: false,
     })) as Record<string, any>;
-    await Promise.all([
-      pluginConfig.save("auth.userInfo", JSON.stringify(refreshed)),
-      pluginConfig.save("auth.jwt", JSON.stringify(String(refreshed?.jwttoken ?? ""))),
-    ]);
+    await pluginConfig.save("auth.userInfo", JSON.stringify(refreshed));
     return refreshed;
   };
 
@@ -981,7 +928,6 @@ async function loginWithPassword(payload: JmLoginPayload = {}): Promise<LoginSub
     path,
     method: "POST",
     formData: { username: account, password },
-    useJwt: false,
   });
 
   const body = (result ?? {}) as Record<string, unknown>;
@@ -989,7 +935,6 @@ async function loginWithPassword(payload: JmLoginPayload = {}): Promise<LoginSub
   await Promise.all([
     pluginConfig.save("auth.account", JSON.stringify(account)),
     pluginConfig.save("auth.password", JSON.stringify(password)),
-    pluginConfig.save("auth.jwt", JSON.stringify(jwtToken)),
     pluginConfig.save("auth.userInfo", JSON.stringify(result)),
   ]);
 
@@ -1268,8 +1213,7 @@ async function runJmAuthAndCheckInLoop() {
     jmAuthFlowRunning = false;
   }
 }
-
-async function init() {
+async function init(): Promise<{ source: string; data: Record<string, unknown> }> {
   console.debug("init");
   await resolveFastestBases();
   if (!jmInitStarted) {
@@ -1343,8 +1287,6 @@ async function getCloudFavoriteFilterBundle(
     method: "GET",
     params: { page: 1, folder_id: "", o: "mr" },
     cache: false,
-    useJwt: payload.useJwt ?? true,
-    jwtToken: payload.jwtToken,
   })) as Record<string, any>;
 
   const folderList = Array.isArray(raw.folder_list) ? raw.folder_list : [];
@@ -1423,9 +1365,10 @@ async function getInfo(): Promise<InfoContract> {
 }
 
 async function getFunctionPage(
-  payload: Record<string, unknown> = {},
+  payload: GetFunctionPagePayload = {},
 ): Promise<FunctionPageContract> {
-  const id = String(payload.id ?? toStringMap(payload.core).id ?? "").trim();
+  const core = toStringMap(payload.core);
+  const id = String(payload.id ?? core.id ?? "").trim();
   if (id !== "recommend") {
     throw new Error(`未知功能: ${id}`);
   }
@@ -1600,9 +1543,10 @@ async function getWeekRankingFilterBundle(): Promise<FilterBundleContract> {
 }
 
 async function getTimeRankingFilterBundle(
-  payload: { tag?: string } = {},
+  payload: { tag?: string; core?: Record<string, unknown> } = {},
 ): Promise<FilterBundleContract> {
-  const tag = String(payload.tag ?? "").trim();
+  const core = toStringMap(payload.core);
+  const tag = String(payload.tag ?? core.tag ?? "").trim();
   const categoryOptions = getTimeRankingCategoryOptions(tag);
   return {
     source: JM_PLUGIN_ID,
@@ -1634,11 +1578,10 @@ async function getTimeRankingFilterBundle(
   };
 }
 
-async function clearPluginSession() {
+async function clearPluginSession(): Promise<{ ok: boolean; message: string }> {
   await Promise.all([
     pluginConfig.save("auth.account", JSON.stringify("")),
     pluginConfig.save("auth.password", JSON.stringify("")),
-    pluginConfig.save("auth.jwt", JSON.stringify("")),
     pluginConfig.save("auth.userInfo", JSON.stringify({})),
     clearRuntimeEndpointCache(),
   ]);
@@ -1649,7 +1592,7 @@ async function clearPluginSession() {
   };
 }
 
-async function dumpRuntimeInfo() {
+async function dumpRuntimeInfo(): Promise<{ ok: boolean; data: Record<string, unknown> }> {
   const probes = lastEndpointProbes.map((probe) => {
     const outcome = probe.outcome;
     return {
@@ -1708,8 +1651,6 @@ async function getComicDetail(payload: ComicDetailPayload = {}): Promise<ComicDe
     path,
     method: "GET",
     params: { id: comicId },
-    useJwt: payload.useJwt ?? true,
-    jwtToken: payload.jwtToken,
   })) as Record<string, any>;
 
   const series = normalizeJmSeries(response.series as any[]);
@@ -1868,21 +1809,19 @@ async function getComicDetail(payload: ComicDetailPayload = {}): Promise<ComicDe
     data,
   };
 }
-
-async function searchComic(payload: JmSearchPayload = {}) {
+async function searchComic(payload: JmSearchPayload = {}): Promise<SearchResultContract> {
   const extern = toStringMap(payload.extern);
   const imageBase = await getImageBaseUrl();
   const page = Math.max(1, toNum(payload.page, 1));
   const keyword = String(payload.keyword ?? extern.keyword ?? "").trim();
   const keywordLower = keyword.toLowerCase();
   const order = String(extern.sort ?? sortByToOrder(extern.sortBy)).trim();
-  const path =
-    String(payload.path ?? extern.path ?? "").trim() || `${await getApiBaseUrl()}/search`;
+  const path = `${await getApiBaseUrl()}/search`;
   const searchPageSize = 80;
-  const buildResult = (content: any[], total: number) => {
+  const buildResult = (content: any[], total: number): SearchResultContract => {
     const scheme = {
-      version: "1.0.0",
-      type: "searchResult",
+      version: "1.0.0" as const,
+      type: "searchResult" as const,
       source: JM_PLUGIN_ID,
       list: "comicGrid",
     };
@@ -1917,11 +1856,7 @@ async function searchComic(payload: JmSearchPayload = {}) {
     const comicId = keywordLower.startsWith("jm") ? keyword.slice(2).trim() : keyword;
     if (comicId) {
       try {
-        const detailResponse = await getComicDetail({
-          comicId,
-          useJwt: payload.useJwt,
-          jwtToken: payload.jwtToken,
-        });
+        const detailResponse = await getComicDetail({ comicId });
         const comicInfo = (detailResponse?.data?.raw as Record<string, any>)?.comicInfo as
           | Record<string, any>
           | undefined;
@@ -1954,8 +1889,6 @@ async function searchComic(payload: JmSearchPayload = {}) {
       page,
       o: order,
     },
-    useJwt: payload.useJwt ?? true,
-    jwtToken: payload.jwtToken,
   })) as Record<string, any>;
 
   const content = Array.isArray(response.content) ? response.content : [];
@@ -2061,18 +1994,15 @@ function buildHomeSectionAction(section: any) {
   };
 }
 
-async function getHomeRecommendData(payload: JmHomePayload = {}) {
-  const extern = toStringMap(payload.extern);
-  const promotePath =
-    String(payload.path ?? extern.promotePath ?? "").trim() ||
-    `${await getApiBaseUrl()}/promote?page=0`;
+async function getHomeRecommendData(
+  payload: JmHomePayload = {},
+): Promise<{ source: string; extern: unknown; scheme: unknown; data: unknown }> {
+  const promotePath = `${await getApiBaseUrl()}/promote?page=0`;
 
   const promote = await jmRequest({
     path: promotePath,
     method: "GET",
     cache: true,
-    useJwt: payload.useJwt ?? true,
-    jwtToken: payload.jwtToken,
   });
 
   const normalizedSections = await Promise.all(
@@ -2118,18 +2048,16 @@ async function getHomeRecommendData(payload: JmHomePayload = {}) {
   };
 }
 
-async function getHomeLatestData(payload: JmHomePayload = {}) {
-  const extern = toStringMap(payload.extern);
+async function getHomeLatestData(
+  payload: JmHomePayload = {},
+): Promise<{ source: string; extern: unknown; scheme: unknown; data: unknown }> {
   const page = Number.isFinite(Number(payload.page)) ? Number(payload.page) : 0;
-  const path =
-    String(payload.path ?? extern.suggestionPath ?? "").trim() || `${await getApiBaseUrl()}/latest`;
+  const path = `${await getApiBaseUrl()}/latest`;
   const suggestion = await jmRequest({
     path,
     method: "GET",
     params: { page: Math.max(0, page) },
     cache: true,
-    useJwt: payload.useJwt ?? true,
-    jwtToken: payload.jwtToken,
   });
 
   const imageBase = await getImageBaseUrl();
@@ -2152,7 +2080,9 @@ async function getHomeLatestData(payload: JmHomePayload = {}) {
   };
 }
 
-async function getRankingData(payload: JmRankingPayload = {}) {
+async function getRankingData(
+  payload: JmRankingPayload = {},
+): Promise<{ source: string; extern: unknown; scheme: unknown; data: unknown }> {
   const page = Number.isFinite(Number(payload.page)) ? Number(payload.page) : 0;
   const extern = toStringMap(payload.extern);
   const c = String(extern.type ?? extern.c ?? "");
@@ -2166,8 +2096,6 @@ async function getRankingData(payload: JmRankingPayload = {}) {
     method: "GET",
     params: { page, c, o },
     cache: true,
-    useJwt: payload.useJwt ?? true,
-    jwtToken: payload.jwtToken,
   });
 
   const total = toNum((raw as any)?.total, 0);
@@ -2194,7 +2122,9 @@ async function getRankingData(payload: JmRankingPayload = {}) {
   };
 }
 
-async function getPromoteListData(payload: JmPromoteListPayload = {}) {
+async function getPromoteListData(
+  payload: JmPromoteListPayload = {},
+): Promise<{ source: string; extern: unknown; scheme: unknown; data: unknown }> {
   console.debug(payload);
   const id = toNum(payload.id, 0);
   const page = Math.max(0, toNum(payload.page, 0));
@@ -2207,8 +2137,6 @@ async function getPromoteListData(payload: JmPromoteListPayload = {}) {
     method: "GET",
     params: { id, page },
     cache: true,
-    useJwt: payload.useJwt ?? true,
-    jwtToken: payload.jwtToken,
   })) as Record<string, any>;
 
   const total = toNum(raw.total, 0);
@@ -2236,15 +2164,14 @@ async function getPromoteListData(payload: JmPromoteListPayload = {}) {
   };
 }
 
-async function getLatestData(payload: JmRankingPayload = {}) {
+async function getLatestData(
+  payload: JmRankingPayload = {},
+): Promise<{ source: string; extern: unknown; scheme: unknown; data: unknown }> {
   const page = Math.max(1, toNum(payload.page, 1));
   const imageBase = await getImageBaseUrl();
   if (page == 1) {
     const latest = await getHomeLatestData({
       page: 0,
-      path: undefined,
-      useJwt: payload.useJwt,
-      jwtToken: payload.jwtToken,
     });
     const list = Array.isArray((latest as any)?.data?.suggestionItems)
       ? (latest as any).data.suggestionItems
@@ -2275,8 +2202,6 @@ async function getLatestData(payload: JmRankingPayload = {}) {
     method: "GET",
     params: { page: requestPage },
     cache: true,
-    useJwt: payload.useJwt ?? true,
-    jwtToken: payload.jwtToken,
   });
 
   console.debug(raw);
@@ -2299,7 +2224,9 @@ async function getLatestData(payload: JmRankingPayload = {}) {
   };
 }
 
-async function getCloudFavoriteData(payload: JmCloudFavoritePayload = {}) {
+async function getCloudFavoriteData(
+  payload: JmCloudFavoritePayload = {},
+): Promise<{ source: string; extern: unknown; scheme: unknown; data: unknown }> {
   const page = Math.max(1, toNum(payload.page, 1));
   const imageBase = await getImageBaseUrl();
   const extern = toStringMap(payload.extern);
@@ -2311,8 +2238,6 @@ async function getCloudFavoriteData(payload: JmCloudFavoritePayload = {}) {
     method: "GET",
     params: { page, folder_id: folderId, o: order },
     cache: false,
-    useJwt: payload.useJwt ?? true,
-    jwtToken: payload.jwtToken,
   })) as Record<string, any>;
 
   const list = Array.isArray(raw.list) ? raw.list : [];
@@ -2360,8 +2285,6 @@ async function toggleLike(payload: JmLikePayload = {}): Promise<ToggleLikeResult
     method: "POST",
     formData: { id: comicId },
     cache: false,
-    useJwt: payload.useJwt ?? true,
-    jwtToken: payload.jwtToken,
   })) as Record<string, any>;
   const status = String(raw?.status ?? "")
     .trim()
@@ -2377,6 +2300,7 @@ async function toggleLike(payload: JmLikePayload = {}): Promise<ToggleLikeResult
 
 const JM_FAVORITE_CONTINUATION_PREFIX = "jm-favorite:v1:";
 const JM_FAVORITE_CONTINUATION_TTL_MS = 15 * 60 * 1000;
+const JM_FAVORITE_DEFAULT_OPTION_ID = "__default__";
 
 type JmFavoriteContinuation = {
   action: "add" | "move";
@@ -2436,24 +2360,12 @@ function decodeFavoriteContinuation(value: string): JmFavoriteContinuation | nul
   }
 }
 
-type JmWorkflowAuth = { useJwt?: boolean; jwtToken?: string };
-
-function readJmWorkflowAuth(extern: Record<string, unknown>): JmWorkflowAuth {
-  const useJwt =
-    "useJwt" in extern && typeof extern.useJwt === "boolean" ? extern.useJwt : undefined;
-  const jwtToken =
-    "jwtToken" in extern && typeof extern.jwtToken === "string" ? extern.jwtToken : undefined;
-  return { useJwt, jwtToken };
-}
-
-async function fetchJmFavoriteFolders(input: JmWorkflowAuth): Promise<JmFavoriteFolder[]> {
+async function fetchJmFavoriteFolders(): Promise<JmFavoriteFolder[]> {
   const raw = await jmRequest({
     path: `${await getApiBaseUrl()}/favorite`,
     method: "GET",
     params: { page: 1, folder_id: "", o: "mr" },
     cache: false,
-    useJwt: input.useJwt ?? true,
-    jwtToken: input.jwtToken,
   });
   const folderList = raw && typeof raw === "object" && "folder_list" in raw ? raw.folder_list : [];
   const folders = Array.isArray(folderList) ? folderList : [];
@@ -2467,14 +2379,12 @@ async function fetchJmFavoriteFolders(input: JmWorkflowAuth): Promise<JmFavorite
     })
     .filter((item) => item.id.length > 0);
 }
-async function addJmFavorite(comicId: string, input: JmWorkflowAuth): Promise<Record<string, any>> {
+async function addJmFavorite(comicId: string): Promise<Record<string, any>> {
   const raw = (await jmRequest({
     path: `${await getApiBaseUrl()}/favorite`,
     method: "POST",
     formData: { aid: comicId },
     cache: false,
-    useJwt: input.useJwt ?? true,
-    jwtToken: input.jwtToken,
   })) as Record<string, any>;
   const status = String(raw?.status ?? "")
     .trim()
@@ -2484,11 +2394,23 @@ async function addJmFavorite(comicId: string, input: JmWorkflowAuth): Promise<Re
   }
   return raw;
 }
+async function removeJmFavorite(comicId: string): Promise<Record<string, any>> {
+  const raw = (await jmRequest({
+    path: `${await getApiBaseUrl()}/favorite`,
+    method: "POST",
+    formData: { aid: comicId },
+    cache: false,
+  })) as Record<string, any>;
+  const status = String(raw?.status ?? "")
+    .trim()
+    .toLowerCase();
+  if (status && status !== "ok") {
+    throw new Error(String(raw?.msg ?? "取消收藏失败").trim() || "取消收藏失败");
+  }
+  return raw;
+}
 
-async function createJmFavoriteFolder(
-  name: string,
-  input: JmWorkflowAuth,
-): Promise<JmFavoriteFolder> {
+async function createJmFavoriteFolder(name: string): Promise<JmFavoriteFolder> {
   const folderName = name.trim();
   const raw = (await jmRequest({
     path: `${await getApiBaseUrl()}/favorite_folder`,
@@ -2500,8 +2422,6 @@ async function createJmFavoriteFolder(
       aid: "",
     },
     cache: false,
-    useJwt: input.useJwt ?? true,
-    jwtToken: input.jwtToken,
   })) as Record<string, any>;
 
   const status = String(raw?.status ?? "")
@@ -2514,7 +2434,7 @@ async function createJmFavoriteFolder(
   if (id) {
     return { id, name: folderName };
   }
-  const folders = await fetchJmFavoriteFolders(input);
+  const folders = await fetchJmFavoriteFolders();
   const created = folders.find((folder) => folder.name === folderName);
   if (!created) {
     throw new Error(String(raw?.msg ?? "新建收藏夹失败").trim() || "新建收藏夹失败");
@@ -2522,11 +2442,7 @@ async function createJmFavoriteFolder(
   return created;
 }
 
-async function moveJmFavorite(
-  comicId: string,
-  folderId: string,
-  input: JmWorkflowAuth,
-): Promise<void> {
+async function moveJmFavorite(comicId: string, folderId: string): Promise<void> {
   const raw = (await jmRequest({
     path: `${await getApiBaseUrl()}/favorite_folder`,
     method: "POST",
@@ -2537,8 +2453,6 @@ async function moveJmFavorite(
       aid: comicId,
     },
     cache: false,
-    useJwt: input.useJwt ?? true,
-    jwtToken: input.jwtToken,
   })) as Record<string, any>;
   const status = String(raw?.status ?? "")
     .trim()
@@ -2560,10 +2474,13 @@ function buildJmFavoriteFolderInput(
     description,
     required: true,
     selection: "single",
-    options: folders.map((folder) => ({
-      id: folder.id,
-      label: folder.name || folder.id,
-    })),
+    options: [
+      { id: JM_FAVORITE_DEFAULT_OPTION_ID, label: "默认收藏夹" },
+      ...folders.map((folder) => ({
+        id: folder.id,
+        label: folder.name || folder.id,
+      })),
+    ],
     allowCreate: true,
     createField: {
       key: "folderName",
@@ -2575,7 +2492,7 @@ function buildJmFavoriteFolderInput(
 }
 
 async function startFavoriteAction(
-  payload: Partial<FavoriteWorkflowStartPayload> = {},
+  payload: FavoriteWorkflowStartPayload,
 ): Promise<FavoriteWorkflowResult> {
   const comicId = String(payload.comicId ?? "").trim();
   const action = payload.action;
@@ -2584,7 +2501,7 @@ async function startFavoriteAction(
   }
   if (action === "add" || action === "move") {
     try {
-      const folders = await fetchJmFavoriteFolders(readJmWorkflowAuth(toStringMap(payload.extern)));
+      const folders = await fetchJmFavoriteFolders();
       return {
         status: "awaitingInput",
         favorited: action === "move",
@@ -2606,14 +2523,22 @@ async function startFavoriteAction(
       return favoriteFailure(error, action === "move");
     }
   }
-  return favoriteFailure(
-    new Error("当前图源只支持收藏与移动到收藏夹"),
-    action === "removeFromTarget",
-  );
+  if (action === "removeAll") {
+    try {
+      await removeJmFavorite(comicId);
+      return { status: "completed", favorited: false, committed: true };
+    } catch (error) {
+      return favoriteFailure(error, true);
+    }
+  }
+  if (action === "removeFromTarget") {
+    return favoriteFailure(new Error("当前图源只支持全局取消收藏"), true);
+  }
+  return favoriteFailure(new Error("不支持的收藏操作"), false);
 }
 
 async function continueFavoriteAction(
-  payload: Partial<FavoriteWorkflowContinuePayload> = {},
+  payload: FavoriteWorkflowContinuePayload,
 ): Promise<FavoriteWorkflowResult> {
   const token = decodeFavoriteContinuation(String(payload.continuationToken ?? ""));
   if (
@@ -2633,24 +2558,27 @@ async function continueFavoriteAction(
     };
   }
   try {
-    const auth = readJmWorkflowAuth(toStringMap(payload.extern));
     const created = String(input.created ?? "").trim();
     if (created) {
-      const folder = await createJmFavoriteFolder(created, auth);
+      const folder = await createJmFavoriteFolder(created);
       if (token.action === "add") {
-        await addJmFavorite(token.comicId, auth);
+        await addJmFavorite(token.comicId);
       }
-      await moveJmFavorite(token.comicId, folder.id, auth);
+      await moveJmFavorite(token.comicId, folder.id);
       return { status: "completed", favorited: true, committed: true };
     }
     const folderId = String(input.value ?? "").trim();
-    if (!folderId) {
+    if (token.action === "add") {
+      await addJmFavorite(token.comicId);
+      if (folderId && folderId !== JM_FAVORITE_DEFAULT_OPTION_ID) {
+        await moveJmFavorite(token.comicId, folderId);
+      }
+      return { status: "completed", favorited: true, committed: true };
+    }
+    if (!folderId || folderId === JM_FAVORITE_DEFAULT_OPTION_ID) {
       throw new Error("未选择有效的收藏夹");
     }
-    if (token.action === "add") {
-      await addJmFavorite(token.comicId, auth);
-    }
-    await moveJmFavorite(token.comicId, folderId, auth);
+    await moveJmFavorite(token.comicId, folderId);
     return { status: "completed", favorited: true, committed: true };
   } catch (error) {
     return { ...favoriteFailure(error), favorited: true };
@@ -2668,7 +2596,7 @@ function buildJmUserCover(photo: unknown, imageBase: string): string {
   return `${imageBase}/media/users/${file}`;
 }
 
-function mapJmReplyItem(item: any, imageBase: string) {
+function mapJmReplyItem(item: any, imageBase: string): CommentItem {
   const id = String(item?.CID ?? "");
   const photo = String(item?.photo ?? "").trim();
   return {
@@ -2678,20 +2606,19 @@ function mapJmReplyItem(item: any, imageBase: string) {
       avatar: {
         url: buildJmUserCover(photo, imageBase),
         path: photo ? `${String(item?.UID ?? "")}.jpg` : "",
-        extern: {
-          path: photo ? `${String(item?.UID ?? "")}.jpg` : "",
-        },
       },
     },
     content: stripHtmlTags(item?.content),
     createdAt: formatDisplayTime(item?.addtime),
+    replyCount: 0,
+    replies: [],
     extern: {
       commentId: id,
     },
   };
 }
 
-function mapJmCommentItem(item: any, imageBase: string) {
+function mapJmCommentItem(item: any, imageBase: string): CommentItem {
   const id = String(item?.CID ?? "");
   const photo = String(item?.photo ?? "").trim();
   const replies = Array.isArray(item?.replys) ? item.replys : [];
@@ -2702,9 +2629,6 @@ function mapJmCommentItem(item: any, imageBase: string) {
       avatar: {
         url: buildJmUserCover(photo, imageBase),
         path: photo ? `${String(item?.UID ?? "")}.jpg` : "",
-        extern: {
-          path: photo ? `${String(item?.UID ?? "")}.jpg` : "",
-        },
       },
     },
     content: stripHtmlTags(item?.content),
@@ -2731,8 +2655,6 @@ async function getCommentFeed(payload: JmCommentFeedPayload = {}): Promise<Comme
     method: "GET",
     params: { page, mode: "manhua", aid: comicId },
     cache: false,
-    useJwt: payload.useJwt ?? true,
-    jwtToken: payload.jwtToken,
   })) as Record<string, any>;
 
   const list = Array.isArray(raw?.list) ? raw.list : [];
@@ -2762,7 +2684,9 @@ async function getCommentFeed(payload: JmCommentFeedPayload = {}): Promise<Comme
   };
 }
 
-async function getWeekRankingData(payload: JmWeekRankingPayload = {}) {
+async function getWeekRankingData(
+  payload: JmWeekRankingPayload = {},
+): Promise<{ source: string; extern: unknown; scheme: unknown; data: unknown }> {
   const date = toNum(payload.date, 0);
   const type = String(payload.type ?? "all");
   const page = Math.max(1, toNum(payload.page, 1));
@@ -2775,8 +2699,6 @@ async function getWeekRankingData(payload: JmWeekRankingPayload = {}) {
     method: "GET",
     params: { date, type, page },
     cache: true,
-    useJwt: payload.useJwt ?? true,
-    jwtToken: payload.jwtToken,
   });
 
   if ((raw as Record<string, any>)["error"] === "没有资料") {
@@ -2821,7 +2743,7 @@ async function getWeekRankingData(payload: JmWeekRankingPayload = {}) {
   };
 }
 
-async function getChapter(payload: JmChapterPayload = {}) {
+async function getChapter(payload: ChapterPayload = {}): Promise<ChapterContentContract> {
   console.debug(payload);
   const chapterId = String(payload.chapterId ?? "").trim();
   if (!chapterId) {
@@ -2837,22 +2759,33 @@ async function getChapter(payload: JmChapterPayload = {}) {
       id: chapterId,
     },
     cache: true,
-    useJwt: payload.useJwt ?? true,
-    jwtToken: payload.jwtToken,
   })) as Record<string, any>;
 
   const images = Array.isArray(response.images) ? response.images : [];
   const imageBase = String(await getImageBaseUrl()).trim();
-  const docs = images.map((image) => ({
+  const pages: ChapterPage[] = images.map((image) => ({
+    id: String(image ?? ""),
     name: String(image ?? ""),
     path: String(image ?? ""),
     url: imageBase ? `${imageBase}/media/photos/${chapterId}/${String(image ?? "")}` : "",
-    id: String(image ?? ""),
+    extern: {},
   }));
 
-  const result = {
+  const comicId = String(payload.comicId ?? "");
+  const chapter: ChapterWithPages = {
+    id: String(response.id ?? chapterId),
+    requestId: String(response.id ?? chapterId),
+    logicalKey: String(response.id ?? chapterId),
+    storageChapterId: String(response.id ?? chapterId),
+    name: String(response.name ?? ""),
+    order: 0,
+    pages,
+    extern: {},
+  };
+
+  return {
     source: JM_PLUGIN_ID,
-    comicId: String(payload.comicId ?? ""),
+    comicId,
     chapterId,
     extern: payload.extern ?? null,
     scheme: {
@@ -2861,38 +2794,13 @@ async function getChapter(payload: JmChapterPayload = {}) {
       source: JM_PLUGIN_ID,
     },
     data: {
-      chapter: {
-        id: String(response.id ?? chapterId),
-        requestId: String(response.id ?? chapterId),
-        logicalKey: String(response.id ?? chapterId),
-        storageChapterId: String(response.id ?? chapterId),
-        name: String(response.name ?? ""),
-        order: 0,
-        pages: docs.map((doc) => ({
-          ...doc,
-          extern: {},
-        })),
-        extern: {},
-      },
-    },
-    chapter: {
-      id: String(response.id ?? chapterId),
-      requestId: String(response.id ?? chapterId),
-      logicalKey: String(response.id ?? chapterId),
-      storageChapterId: String(response.id ?? chapterId),
-      name: String(response.name ?? ""),
-      order: 0,
-      pages: docs.map((doc) => ({
-        ...doc,
-        extern: {},
-      })),
-      extern: {},
+      comic: { id: comicId, source: JM_PLUGIN_ID, title: "", extern: {} },
+      chapter,
+      chapters: [chapter],
     },
   };
-  return result;
 }
-
-async function getReadSnapshot(payload: JmReadSnapshotPayload = {}) {
+async function getReadSnapshot(payload: JmReadSnapshotPayload = {}): Promise<ReadSnapshotContract> {
   console.debug(payload);
   const comicId = String(payload.comicId ?? "").trim();
   if (!comicId) {
@@ -2900,17 +2808,9 @@ async function getReadSnapshot(payload: JmReadSnapshotPayload = {}) {
   }
 
   const externInput = toStringMap(payload.extern);
-  const detailPath = String(externInput.path ?? "").trim();
-  const detailUseJwt =
-    externInput.useJwt === undefined ? undefined : toBool(externInput.useJwt, true);
-  const detailJwtToken = String(externInput.jwtToken ?? "").trim();
-
   const detail = await getComicDetail({
     comicId,
     extern: payload.extern,
-    path: detailPath || undefined,
-    useJwt: detailUseJwt,
-    jwtToken: detailJwtToken || undefined,
   });
   const normal = (detail as any)?.data?.normal ?? (detail as any)?.normal ?? {};
 
@@ -2948,9 +2848,6 @@ async function getReadSnapshot(payload: JmReadSnapshotPayload = {}) {
     comicId,
     chapterId,
     extern: payload.extern,
-    path: detailPath || undefined,
-    useJwt: detailUseJwt,
-    jwtToken: detailJwtToken || undefined,
   });
   const chapterData =
     (chapterBundle as any)?.data?.chapter ?? (chapterBundle as any)?.chapter ?? {};
