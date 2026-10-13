@@ -88,7 +88,6 @@ export function createJmClient() {
     const meta: JmMeta = cfg.__jmMeta || {
       ts: nowTs(),
       cacheEnabled: false,
-      useJwt: true,
     };
 
     const token = await md5Hex(`${meta.ts}${Config.JM_VERSION}`);
@@ -103,7 +102,7 @@ export function createJmClient() {
       authHeaders.Host = host;
     }
 
-    if (meta.useJwt) {
+    if (!String(url).toLowerCase().includes("/login")) {
       const jwt = await getJwtToken();
       if (jwt) {
         authHeaders.Authorization = `Bearer ${jwt}`;
