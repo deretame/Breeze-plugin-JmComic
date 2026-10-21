@@ -35,10 +35,12 @@ export function buildPluginInfo(input: BuildPluginInfoInput) {
     uuid: JM_PLUGIN_ID,
     iconUrl: "https://raw.githubusercontent.com/deretame/Breeze-plugin-JmComic/main/assets/fO.webp",
     describe: "禁漫天堂插件",
-    version: "0.0.15",
+    version: "0.1.0",
     home: "https://github.com/deretame/Breeze-plugin-JmComic",
     updateUrl: "https://api.github.com/repos/deretame/Breeze-plugin-JmComic/releases/latest",
     npmName: "breeze-plugin-jm-comic",
+    haveHome: true,
+    haveCloudFavorite: true,
     function: [
       {
         id: "recommend",

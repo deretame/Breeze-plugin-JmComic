@@ -951,17 +951,6 @@ async function loginWithPassword(payload: JmLoginPayload = {}): Promise<LoginSub
 }
 
 let jmInitStarted = false;
-let jmAuthFlowRunning = false;
-
-function randomRetryDelayMs() {
-  const min = 20_000;
-  const max = 300_000;
-  return Math.floor(min + Math.random() * (max - min));
-}
-
-function waitMs(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
 
 /** 最近一次选线探针明细, 供 dumpRuntimeInfo 展示. */
 let lastEndpointProbes: EndpointProbe[] = [];
@@ -1102,124 +1091,124 @@ async function resolveFastestBases() {
   return { data };
 }
 
-async function tryJmCheckin() {
+const JM_CHECKIN_RETRY_DELAY_MS = 60_000;
+let jmCheckinPromise: Promise<void> | null = null;
+
+async function attemptJmCheckinOnce(): Promise<void> {
   const stored = await loadPluginSetting("auth.userInfo", {});
   const uid = stored?.uid;
   if (!uid) {
-    console.error("无法获取用户UID，跳过签到");
-    return false;
+    throw new Error("无法获取用户UID，稍后重试签到");
   }
 
-  const maxRetries = 3;
-  let retryCount = 0;
+  const dailyListRes = await jmRequest({
+    url: `${await getApiBaseUrl()}/daily_list/filter`,
+    method: "POST",
+    formData: {
+      data: String(new Date().getFullYear()),
+    },
+  });
 
-  while (retryCount <= maxRetries) {
-    try {
-      const dailyListRes = await jmRequest({
-        url: `${await getApiBaseUrl()}/daily_list/filter`,
-        method: "POST",
-        formData: {
-          data: String(new Date().getFullYear()),
-        },
-      });
-
-      const list = dailyListRes?.data?.list ?? dailyListRes?.list ?? [];
-      if (!Array.isArray(list) || list.length === 0) {
-        console.log("今日无签到项");
-        return true;
-      }
-
-      const lastItem = list[list.length - 1];
-      const dailyId = lastItem?.id;
-      if (!dailyId) {
-        throw new Error("无法获取 dailyId");
-      }
-
-      const chkRes = await jmRequest({
-        url: `${await getApiBaseUrl()}/daily_chk`,
-        method: "POST",
-        formData: {
-          user_id: uid,
-          daily_id: dailyId,
-        },
-      });
-
-      let msg = String(chkRes?.data?.msg ?? chkRes?.msg ?? "");
-
-      msg = await opencc.convert(msg, "t2s.json");
-
-      if (msg !== "今天已经签到过了") {
-        try {
-          flutterTools.showToast({
-            message: "禁漫自动签到成功！",
-            level: "success",
-          });
-        } catch {}
-      }
-
-      return true;
-    } catch (error) {
-      console.error("签到出错", error);
-      retryCount++;
-      if (retryCount > maxRetries) {
-        console.error("禁漫签到失败");
-        return false;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-  }
-
-  return false;
-}
-
-async function runJmAuthAndCheckInLoop() {
-  if (jmAuthFlowRunning) {
+  const list = dailyListRes?.data?.list ?? dailyListRes?.list ?? [];
+  if (!Array.isArray(list) || list.length === 0) {
+    console.log("今日无签到项");
     return;
   }
-  jmAuthFlowRunning = true;
-  try {
-    while (true) {
-      try {
-        const account = String(await loadPluginSetting("auth.account", "")).trim();
-        const password = String(await loadPluginSetting("auth.password", ""));
 
-        if (!account || !password) {
-          console.info("[jm.init] skip auth/checkin: no credentials");
-          return;
-        }
+  const lastItem = list[list.length - 1];
+  const dailyId = lastItem?.id;
+  if (!dailyId) {
+    throw new Error("无法获取 dailyId");
+  }
 
-        const data = await loginWithPassword({
-          account,
-          password,
-          path: `${await getApiBaseUrl()}/login`,
-        });
+  const chkRes = await jmRequest({
+    url: `${await getApiBaseUrl()}/daily_chk`,
+    method: "POST",
+    formData: {
+      user_id: uid,
+      daily_id: dailyId,
+    },
+  });
 
-        console.info(data);
+  let msg = String(chkRes?.data?.msg ?? chkRes?.msg ?? "");
 
-        const checkedIn = await tryJmCheckin();
-        if (!checkedIn) {
-          throw new Error("checkin failed");
-        }
+  msg = await opencc.convert(msg, "t2s.json");
 
-        console.info("[jm.init] login + checkin ok");
-        return;
-      } catch (error) {
-        const delay = randomRetryDelayMs();
-        console.warn(`[jm.init] login/checkin failed, retry in ${delay}ms`, error);
-        await waitMs(delay);
-      }
-    }
-  } finally {
-    jmAuthFlowRunning = false;
+  if (msg !== "今天已经签到过了") {
+    try {
+      flutterTools.showToast({
+        message: "禁漫自动签到成功！",
+        level: "success",
+      });
+    } catch {}
   }
 }
+
+async function tryJmCheckin(): Promise<void> {
+  if (jmCheckinPromise) {
+    return jmCheckinPromise;
+  }
+
+  const task = (async () => {
+    while (true) {
+      try {
+        await attemptJmCheckinOnce();
+        console.info("[jm.init] checkin success");
+        return;
+      } catch (error) {
+        console.warn(`[jm.init] checkin failed, retry in ${JM_CHECKIN_RETRY_DELAY_MS}ms`, error);
+        await new Promise<void>((resolve) => setTimeout(resolve, JM_CHECKIN_RETRY_DELAY_MS));
+      }
+    }
+  })();
+
+  jmCheckinPromise = task;
+  try {
+    await task;
+  } finally {
+    if (jmCheckinPromise === task) {
+      jmCheckinPromise = null;
+    }
+  }
+}
+
+async function loginForInit(): Promise<void> {
+  const account = String(await loadPluginSetting("auth.account", "")).trim();
+  const password = String(await loadPluginSetting("auth.password", ""));
+  if (!account || !password) {
+    console.info("[jm.init] skip login: no credentials");
+    return;
+  }
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await loginWithPassword({
+        account,
+        password,
+        path: `${await getApiBaseUrl()}/login`,
+      });
+      console.info(`[jm.init] login ok (attempt ${attempt})`);
+      // 签到不阻塞 init，后台跑一次即可。
+      void tryJmCheckin().catch((error: unknown) => {
+        console.warn("[jm.init] background checkin failed", error);
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn(`[jm.init] login failed (attempt ${attempt}/3)`, error);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`登录失败，已重试 3 次: ${String(lastError)}`);
+}
+
 async function init(): Promise<{ source: string; data: Record<string, unknown> }> {
   console.debug("init");
   await resolveFastestBases();
   if (!jmInitStarted) {
     jmInitStarted = true;
-    void runJmAuthAndCheckInLoop();
   }
+  // 走完登录（最多 3 次）才算 init 成功；无账号直接返回成功。
+  await loginForInit();
 
   const endpoints = await getEndpoints();
   return {
@@ -1353,6 +1342,55 @@ async function getCloudFavoriteSceneBundle(): Promise<ComicListSceneBundleContra
     },
     data: {
       scene: buildJmCloudFavoriteScene(),
+    },
+  };
+}
+
+async function getPluginHomePagesBundle(): Promise<Record<string, unknown>> {
+  const recommend = await getFunctionPage({ id: "recommend" });
+  return {
+    source: JM_PLUGIN_ID,
+    scheme: {
+      version: "1.0.0",
+      type: "homePagesBundle",
+    },
+    data: {
+      tabs: [
+        {
+          id: "recommend",
+          title: "推荐",
+          page: recommend,
+        },
+        {
+          id: "latest",
+          title: "最新",
+          scene: buildJmLatestScene(),
+        },
+        {
+          id: "ranking",
+          title: "排行榜",
+          scene: buildJmRankingScene(),
+        },
+      ],
+    },
+  };
+}
+
+async function getPluginCloudFavoritePagesBundle(): Promise<Record<string, unknown>> {
+  return {
+    source: JM_PLUGIN_ID,
+    scheme: {
+      version: "1.0.0",
+      type: "cloudFavoritePagesBundle",
+    },
+    data: {
+      tabs: [
+        {
+          id: "cloudFavorite",
+          title: "云端收藏",
+          scene: buildJmCloudFavoriteScene(),
+        },
+      ],
     },
   };
 }
@@ -2967,4 +3005,6 @@ export default {
   getChapter,
   getReadSnapshot,
   fetchImageBytes,
+  getPluginHomePagesBundle,
+  getPluginCloudFavoritePagesBundle,
 };
