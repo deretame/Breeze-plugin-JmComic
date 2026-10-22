@@ -2049,6 +2049,146 @@ function timestampToIso(value: unknown): string {
   return new Date(seconds * 1000).toISOString();
 }
 
+/**
+ * 不具备区分度的元信息标签: 语言/连载状态/来源标记之类,
+ * 拿它们做相关推荐会把一堆无关本子带进来.
+ */
+const JM_RECOMMEND_STOP_TAGS = new Set([
+  "中文",
+  "繁体中文",
+  "简体中文",
+  "连载中",
+  "完结",
+  "单行本",
+  "禁漫书库",
+  "网友大推",
+  "禁漫汉化组",
+  "禁漫去码",
+  "無修正",
+]);
+
+/** 相关推荐最多取多少个条件词做检索. */
+const JM_RECOMMEND_TAG_LIMIT = 5;
+/** 相关推荐最终展示多少条. */
+const JM_RECOMMEND_ITEM_LIMIT = 12;
+/** 相关推荐的单个标签检索超时(毫秒), 超了就少这个标签, 不拖慢详情页. */
+const JM_RECOMMEND_TIMEOUT_MS = 6000;
+
+function toRecommendItem(item: any, imageBase: string): RecommendItem {
+  const unifiedItem = toComicItem(item, imageBase);
+  return {
+    source: JM_PLUGIN_ID,
+    id: unifiedItem.id,
+    title: unifiedItem.title,
+    subtitle: unifiedItem.subtitle,
+    finished: unifiedItem.finished,
+    likesCount: unifiedItem.likesCount,
+    viewsCount: unifiedItem.viewsCount,
+    updatedAt: unifiedItem.updatedAt,
+    cover: createImage({
+      id: unifiedItem.id,
+      url: resolveJmCoverUrl(item, imageBase),
+      path: `${unifiedItem.id}.jpg`,
+      extern: {},
+    }),
+    metadata: unifiedItem.metadata,
+    raw: unifiedItem.raw,
+    extern: {},
+  };
+}
+
+/**
+ * 基于本子标签的相关推荐.
+ *
+ * 禁漫服务端自带的 related_list 其实是"同题材里 id 最小(最老)的那批"
+ * (实测每个本子 12 条, 只带 id/author/name/image, 且按 id 升序),
+ * 推荐出来的东西往往年代久远、也不带标签信息.
+ *
+ * 这里改成: 拿本子自己的标签去跑标签检索(main_tag=3), 统计每个候选命中了几个标签,
+ * 命中越多越像, 标签越冷门越有区分度, 同样的按新到旧排. 全部标签并发检索, 一次批量就够.
+ */
+async function buildTagBasedRecommend(input: {
+  comicId: string;
+  tags: string[];
+  imageBase: string;
+}): Promise<RecommendItem[] | null> {
+  const { comicId, tags, imageBase } = input;
+
+  const usable: string[] = [];
+  for (const raw of tags) {
+    const tag = await simplifyTagText(raw);
+    if (!tag || JM_RECOMMEND_STOP_TAGS.has(tag)) {
+      continue;
+    }
+    if (!usable.includes(tag)) {
+      usable.push(tag);
+    }
+  }
+  if (!usable.length) {
+    return null;
+  }
+
+  const selected = usable.slice(0, JM_RECOMMEND_TAG_LIMIT);
+  const lists = await mapWithConcurrency(selected, selected.length, async (tag) => {
+    try {
+      const response = (await jmRequest({
+        path: `${await getApiBaseUrl()}/search`,
+        method: "GET",
+        params: { search_query: tag, page: 1, o: "", main_tag: 3 },
+        // 推荐是锦上添花, 不值得让详情页陪着一起等
+        timeoutMs: JM_RECOMMEND_TIMEOUT_MS,
+      })) as Record<string, any>;
+      const content = Array.isArray(response?.content) ? response.content : [];
+      return { tag, total: toNum(response?.total, content.length), items: content };
+    } catch (err) {
+      console.warn("[jm] 相关推荐标签检索失败", tag, err);
+      return { tag, total: 0, items: [] as any[] };
+    }
+  });
+
+  type Candidate = {
+    item: any;
+    hits: number;
+    rarity: number;
+    adddate: string;
+  };
+  const stats = new Map<string, Candidate>();
+  for (const list of lists) {
+    // 冷门标签权重高: 共用一个冷门标签比共用一个热门标签更像
+    const weight = 1 / Math.max(1, list.total);
+    for (const item of list.items) {
+      const id = String(item?.id ?? "");
+      if (!id || id === comicId) {
+        continue;
+      }
+      const current = stats.get(id) ?? {
+        item,
+        hits: 0,
+        rarity: 0,
+        adddate: String(item?.adddate ?? ""),
+      };
+      current.hits += 1;
+      current.rarity += weight;
+      stats.set(id, current);
+    }
+  }
+
+  if (!stats.size) {
+    return null;
+  }
+
+  const ranked = [...stats.values()].sort(
+    (a, b) =>
+      b.hits - a.hits ||
+      b.rarity - a.rarity ||
+      String(b.adddate).localeCompare(String(a.adddate)),
+  );
+
+  return ranked
+    .slice(0, JM_RECOMMEND_ITEM_LIMIT)
+    .map((candidate) => toRecommendItem(candidate.item, imageBase));
+}
+
 async function getComicDetail(payload: ComicDetailPayload = {}): Promise<ComicDetailContract> {
   const comicId = String(payload.comicId ?? "").trim();
   if (!comicId) {
@@ -2165,28 +2305,25 @@ async function getComicDetail(payload: ComicDetailPayload = {}): Promise<ComicDe
         },
       ];
     })(),
-    recommend: (normalizedInfo.related_list as any[]).map((item: any): RecommendItem => {
-      const unifiedItem = toComicItem(item, imageBase);
-      return {
-        source: JM_PLUGIN_ID,
-        id: unifiedItem.id,
-        title: unifiedItem.title,
-        subtitle: unifiedItem.subtitle,
-        finished: unifiedItem.finished,
-        likesCount: unifiedItem.likesCount,
-        viewsCount: unifiedItem.viewsCount,
-        updatedAt: unifiedItem.updatedAt,
-        cover: createImage({
-          id: unifiedItem.id,
-          url: resolveJmCoverUrl(item, imageBase),
-          path: `${unifiedItem.id}.jpg`,
-          extern: {},
-        }),
-        metadata: unifiedItem.metadata,
-        raw: unifiedItem.raw,
-        extern: {},
-      };
-    }),
+    recommend: await (async () => {
+      // 优先用基于标签的相关推荐; 拿不到(本子没有可用标签/检索全失败)时退回服务端那份
+      let tagBased: RecommendItem[] | null = null;
+      try {
+        tagBased = await buildTagBasedRecommend({
+          comicId,
+          tags: normalizedInfo.tags,
+          imageBase,
+        });
+      } catch (err) {
+        console.warn("[jm] 生成标签相关推荐失败", err);
+      }
+      if (tagBased && tagBased.length > 0) {
+        return tagBased;
+      }
+      return (normalizedInfo.related_list as any[]).map((item: any) =>
+        toRecommendItem(item, imageBase),
+      );
+    })(),
     totalViews: toNum(normalizedInfo.total_views),
     totalLikes: toNum(normalizedInfo.likes),
     totalComments: toNum(normalizedInfo.comment_total),

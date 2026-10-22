@@ -8,6 +8,8 @@ export type RequestPayload = {
   data?: unknown;
   formData?: Record<string, unknown>;
   cache?: boolean;
+  /** 单请求超时(毫秒), 默认 10s. */
+  timeoutMs?: number;
 };
 
 export type JmMeta = {
