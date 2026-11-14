@@ -232,6 +232,17 @@ type RankingFilterOption = {
   children?: RankingFilterOption[];
 };
 
+/** kit 的 FilterField.kind 尚未声明 dropdown，先在插件侧扩展。 */
+type FilterFieldWithDropdown = Omit<FilterBundleContract["scheme"]["fields"][number], "kind"> & {
+  kind: "choice" | "dropdown";
+};
+
+type FilterBundleContractWithDropdown = Omit<FilterBundleContract, "scheme"> & {
+  scheme: Omit<FilterBundleContract["scheme"], "fields"> & {
+    fields: FilterFieldWithDropdown[];
+  };
+};
+
 type JmLoginPayload = LoginSubmitPayload & {
   account?: string;
   password?: string;
@@ -1198,7 +1209,9 @@ async function loginForInit(): Promise<void> {
       console.warn(`[jm.init] login failed (attempt ${attempt}/3)`, error);
     }
   }
-  throw lastError instanceof Error ? lastError : new Error(`登录失败，已重试 3 次: ${String(lastError)}`);
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`登录失败，已重试 3 次: ${String(lastError)}`);
 }
 
 async function init(): Promise<{ source: string; data: Record<string, unknown> }> {
@@ -2781,6 +2794,152 @@ async function getWeekRankingData(
   };
 }
 
+function asUnknownList(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+type JmWeekMeta = {
+  categories: Array<{ id: string; time: string }>;
+  types: Array<{ id: string; title: string }>;
+};
+
+let weekMetaCache: { value: JmWeekMeta; expireAt: number } | null = null;
+
+async function getWeekMeta(): Promise<JmWeekMeta> {
+  if (weekMetaCache && Date.now() < weekMetaCache.expireAt) {
+    return weekMetaCache.value;
+  }
+
+  const path = `${await getApiBaseUrl()}/week`;
+  const raw = toStringMap(
+    await jmRequest({
+      path,
+      method: "GET",
+      params: {},
+      cache: true,
+    }),
+  );
+
+  const categories = asUnknownList(raw.categories)
+    .map((item) => {
+      const record = toStringMap(item);
+      return {
+        id: String(record.id ?? "").trim(),
+        time: String(record.time ?? "").trim(),
+      };
+    })
+    .filter((item) => item.id.length > 0);
+
+  const types = asUnknownList(raw.type)
+    .map((item) => {
+      const record = toStringMap(item);
+      return {
+        id: String(record.id ?? "").trim(),
+        title: String(record.title ?? "").trim(),
+      };
+    })
+    .filter((item) => item.id.length > 0);
+
+  const meta = { categories, types };
+  weekMetaCache = { value: meta, expireAt: Date.now() + 5 * 60 * 1000 };
+  return meta;
+}
+
+async function getWeekMustWatchData(
+  payload: {
+    page?: unknown;
+    week?: unknown;
+    type?: unknown;
+    core?: unknown;
+    extern?: unknown;
+  } = {},
+): Promise<{ source: string; extern: unknown; scheme: unknown; data: unknown }> {
+  const meta = await getWeekMeta();
+  const core = toStringMap(payload.core);
+  const extern = toStringMap(payload.extern);
+  const page = Math.max(1, toNum(payload.page, 1));
+  const week =
+    String(payload.week ?? core.week ?? extern.week ?? "").trim() || meta.categories[0]?.id || "";
+  const type = String(payload.type ?? core.type ?? extern.type ?? "").trim() || "manga";
+  const path = `${await getApiBaseUrl()}/week/filter`;
+  const imageBase = await getImageBaseUrl();
+
+  const raw = toStringMap(
+    await jmRequest({
+      path,
+      method: "GET",
+      params: { id: week, type, page },
+      cache: true,
+    }),
+  );
+
+  const list = asUnknownList(raw.list);
+  const total = toNum(raw.total, 0);
+  const hasReachedMax = total > 0 ? page * 20 >= total : list.length < 20;
+
+  return {
+    source: JM_PLUGIN_ID,
+    extern: payload.extern ?? null,
+    scheme: {
+      version: "1.0.0",
+      type: "weekMustWatchFeed",
+      card: "comic",
+    },
+    data: {
+      page,
+      total,
+      hasReachedMax,
+      items: list.map((item) => toComicItem(item, imageBase)),
+      raw,
+    },
+  };
+}
+
+async function getWeekFilterBundle(): Promise<FilterBundleContractWithDropdown> {
+  const meta = await getWeekMeta();
+  const typeLabels: Record<string, string> = {
+    manga: "日漫",
+    another: "其他",
+    hanman: "韩漫",
+  };
+  return {
+    source: JM_PLUGIN_ID,
+    scheme: {
+      version: "1.0.0",
+      type: "weekMustWatchFilter",
+      title: "筛选",
+      fields: [
+        {
+          key: "week",
+          kind: "dropdown",
+          label: "更新时间",
+          options: meta.categories.map((item) => ({
+            label: item.time || item.id,
+            value: item.id,
+            result: { core: { week: item.id } },
+          })),
+        },
+        {
+          key: "type",
+          kind: "choice",
+          label: "分类",
+          options: meta.types.map((item) => ({
+            label: item.title || typeLabels[item.id] || item.id,
+            value: item.id,
+            result: { core: { type: item.id } },
+          })),
+        },
+      ],
+    },
+    data: {
+      values: {
+        week: meta.categories[0]?.id ?? "",
+        type: "manga",
+      },
+    },
+  };
+}
+
 async function getChapter(payload: ChapterPayload = {}): Promise<ChapterContentContract> {
   console.debug(payload);
   const chapterId = String(payload.chapterId ?? "").trim();
@@ -2988,6 +3147,8 @@ export default {
   getRankingFilterBundle,
   getAdvancedSearchScheme,
   getWeekRankingFilterBundle,
+  getWeekFilterBundle,
+  getWeekMustWatchData,
   getTimeRankingFilterBundle,
   clearPluginSession,
   dumpRuntimeInfo,

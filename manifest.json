@@ -23,6 +23,36 @@
       }
     },
     {
+      "id": "week",
+      "title": "每周必看",
+      "action": {
+        "type": "openComicList",
+        "payload": {
+          "scene": {
+            "title": "每周必看",
+            "source": "bf99008d-010b-4f17-ac7c-61a9b57dc3d9",
+            "body": {
+              "type": "pluginPagedComicList",
+              "request": {
+                "fnPath": "getWeekMustWatchData",
+                "core": {},
+                "extern": {
+                  "source": "weekMustWatch"
+                }
+              }
+            },
+            "filter": {
+              "fnPath": "getWeekFilterBundle",
+              "core": {},
+              "extern": {
+                "source": "weekMustWatch"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "id": "latest",
       "title": "最新",
       "action": {

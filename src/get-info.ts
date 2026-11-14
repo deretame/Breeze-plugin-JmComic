@@ -29,6 +29,26 @@ export function buildJmCloudFavoriteScene(): ComicListScene {
   };
 }
 
+export function buildJmWeekScene(): ComicListScene {
+  return {
+    title: "每周必看",
+    source: JM_PLUGIN_ID,
+    body: {
+      type: "pluginPagedComicList",
+      request: {
+        fnPath: "getWeekMustWatchData",
+        core: {},
+        extern: { source: "weekMustWatch" },
+      },
+    },
+    filter: {
+      fnPath: "getWeekFilterBundle",
+      core: {},
+      extern: { source: "weekMustWatch" },
+    },
+  };
+}
+
 export function buildPluginInfo(input: BuildPluginInfoInput) {
   return {
     name: "禁漫天堂",
@@ -52,6 +72,14 @@ export function buildPluginInfo(input: BuildPluginInfoInput) {
             title: "推荐",
             presentation: "page" as const,
           },
+        },
+      },
+      {
+        id: "week",
+        title: "每周必看",
+        action: {
+          type: "openComicList" as const,
+          payload: { scene: buildJmWeekScene() },
         },
       },
       {
