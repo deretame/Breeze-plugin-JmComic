@@ -62,7 +62,7 @@ import {
   probeAll,
   probeImageHost,
 } from "./endpoint-pool";
-import { buildJmCloudFavoriteScene, buildPluginInfo } from "./get-info";
+import { buildJmCloudFavoriteScene, buildJmWeekScene, buildPluginInfo } from "./get-info";
 import type { BuiltRequest } from "./request-config";
 import { buildRequestConfig } from "./request-config";
 import {
@@ -1383,6 +1383,11 @@ async function getPluginHomePagesBundle(): Promise<Record<string, unknown>> {
           id: "ranking",
           title: "排行榜",
           scene: buildJmRankingScene(),
+        },
+        {
+          id: "week",
+          title: "每周必看",
+          scene: buildJmWeekScene(),
         },
       ],
     },
