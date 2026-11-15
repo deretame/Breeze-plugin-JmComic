@@ -7,6 +7,7 @@ type Scene = Record<string, unknown>;
 type BuildPluginInfoInput = {
   buildLatestScene: () => Scene;
   buildRankingScene: () => Scene;
+  showWeek?: boolean;
 };
 
 export function buildJmCloudFavoriteScene(): ComicListScene {
@@ -55,7 +56,7 @@ export function buildPluginInfo(input: BuildPluginInfoInput) {
     uuid: JM_PLUGIN_ID,
     iconUrl: "https://raw.githubusercontent.com/deretame/Breeze-plugin-JmComic/main/assets/fO.webp",
     describe: "禁漫天堂插件",
-    version: "0.1.0",
+    version: "0.1.1",
     home: "https://github.com/deretame/Breeze-plugin-JmComic",
     updateUrl: "https://api.github.com/repos/deretame/Breeze-plugin-JmComic/releases/latest",
     npmName: "breeze-plugin-jm-comic",
@@ -74,14 +75,18 @@ export function buildPluginInfo(input: BuildPluginInfoInput) {
           },
         },
       },
-      {
-        id: "week",
-        title: "每周必看",
-        action: {
-          type: "openComicList" as const,
-          payload: { scene: buildJmWeekScene() },
-        },
-      },
+      ...(input.showWeek
+        ? [
+            {
+              id: "week",
+              title: "每周必看",
+              action: {
+                type: "openComicList" as const,
+                payload: { scene: buildJmWeekScene() },
+              },
+            },
+          ]
+        : []),
       {
         id: "latest",
         title: "最新",
@@ -165,5 +170,8 @@ export function buildManifestInfo() {
           extern: { source: "ranking" },
         },
       }),
+    // Manifest is a static snapshot; keep the week entry for the store listing.
+    // Runtime getInfo/getPluginHomePagesBundle gate it by app version.
+    showWeek: true,
   });
 }

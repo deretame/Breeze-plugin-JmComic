@@ -232,17 +232,6 @@ type RankingFilterOption = {
   children?: RankingFilterOption[];
 };
 
-/** kit 的 FilterField.kind 尚未声明 dropdown，先在插件侧扩展。 */
-type FilterFieldWithDropdown = Omit<FilterBundleContract["scheme"]["fields"][number], "kind"> & {
-  kind: "choice" | "dropdown";
-};
-
-type FilterBundleContractWithDropdown = Omit<FilterBundleContract, "scheme"> & {
-  scheme: Omit<FilterBundleContract["scheme"], "fields"> & {
-    fields: FilterFieldWithDropdown[];
-  };
-};
-
 type JmLoginPayload = LoginSubmitPayload & {
   account?: string;
   password?: string;
@@ -788,6 +777,11 @@ function compareVersions(a: string, b: string): number {
 async function isLegacyHost(): Promise<boolean> {
   const version = await flutterTools.getAppVersion();
   return compareVersions(version, "3.0.34") < 0;
+}
+
+async function supportsWeekFeature(): Promise<boolean> {
+  const version = await flutterTools.getAppVersion();
+  return compareVersions(version, "3.0.37") > 0;
 }
 
 async function getSettingsBundle(): Promise<SettingsBundleContract> {
@@ -1361,6 +1355,30 @@ async function getCloudFavoriteSceneBundle(): Promise<ComicListSceneBundleContra
 
 async function getPluginHomePagesBundle(): Promise<Record<string, unknown>> {
   const recommend = await getFunctionPage({ id: "recommend" });
+  const tabs: Array<Record<string, unknown>> = [
+    {
+      id: "recommend",
+      title: "推荐",
+      page: recommend,
+    },
+    {
+      id: "latest",
+      title: "最新",
+      scene: buildJmLatestScene(),
+    },
+    {
+      id: "ranking",
+      title: "排行榜",
+      scene: buildJmRankingScene(),
+    },
+  ];
+  if (await supportsWeekFeature()) {
+    tabs.push({
+      id: "week",
+      title: "每周必看",
+      scene: buildJmWeekScene(),
+    });
+  }
   return {
     source: JM_PLUGIN_ID,
     scheme: {
@@ -1368,28 +1386,7 @@ async function getPluginHomePagesBundle(): Promise<Record<string, unknown>> {
       type: "homePagesBundle",
     },
     data: {
-      tabs: [
-        {
-          id: "recommend",
-          title: "推荐",
-          page: recommend,
-        },
-        {
-          id: "latest",
-          title: "最新",
-          scene: buildJmLatestScene(),
-        },
-        {
-          id: "ranking",
-          title: "排行榜",
-          scene: buildJmRankingScene(),
-        },
-        {
-          id: "week",
-          title: "每周必看",
-          scene: buildJmWeekScene(),
-        },
-      ],
+      tabs,
     },
   };
 }
@@ -1417,6 +1414,7 @@ async function getInfo(): Promise<InfoContract> {
   return buildPluginInfo({
     buildLatestScene: buildJmLatestScene,
     buildRankingScene: buildJmRankingScene,
+    showWeek: await supportsWeekFeature(),
   }) as InfoContract;
 }
 
@@ -2900,7 +2898,7 @@ async function getWeekMustWatchData(
   };
 }
 
-async function getWeekFilterBundle(): Promise<FilterBundleContractWithDropdown> {
+async function getWeekFilterBundle(): Promise<FilterBundleContract> {
   const meta = await getWeekMeta();
   const typeLabels: Record<string, string> = {
     manga: "日漫",
