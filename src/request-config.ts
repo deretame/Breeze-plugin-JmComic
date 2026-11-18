@@ -37,7 +37,7 @@ export async function buildRequestConfig(input: RequestPayload): Promise<BuiltRe
     params: input.params,
     data: body,
     headers: headers as unknown as JmRequestConfig["headers"],
-    timeout: 10000,
+    timeout: Math.max(1000, Number(input.timeoutMs) || 10000),
     responseType: "arraybuffer",
     validateStatus: () => true,
     __jmMeta: {
